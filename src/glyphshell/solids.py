@@ -15,6 +15,12 @@ EDGE_GUARD = 0.02
 # 穴の円柱を、接触面から外へはみ出させる長さ。面とちょうど重なる底を作らないため。
 POCKET_OVERSHOOT = 0.5
 POCKET_SEGMENTS = 48
+# N 極を外へ向ける穴の印。殻の内側の面に付ける丸い突起で、組むと見えなくなる。
+# 高さは最小の肉厚と同じ 0.8 mm（2層ぶん以上で、指で触って分かる）、直径はその3倍
+MARK_HEIGHT = 0.8
+MARK_DIAMETER = 2.4
+# 突起の根元を殻の中へ埋める深さ。面とちょうど重なる底を作らないため
+MARK_ROOT = 0.3
 
 
 @dataclass(frozen=True)
@@ -34,6 +40,7 @@ class Pocket:
     point: np.ndarray  # 接触面の中心（曲面の上）
     normal: np.ndarray  # その点での曲面の外向きの法線
     into: np.ndarray  # 掘る向き（接触面に垂直で、ピースの内側を向く）
+    north_out: bool = False  # 磁石の N 極を接触面の外へ向ける穴か。真なら内側の面に印の突起を付ける
 
 
 def _triangle_areas(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
@@ -125,12 +132,21 @@ def thicken(region: Region, thickness: float) -> manifold3d.Manifold:
 def piece_solid(
     region: Region, thickness: float, pockets: list[Pocket], hole_diameter: float, hole_depth: float
 ) -> manifold3d.Manifold:
-    """厚みを付けた立体に、磁石の穴を開ける。穴の中心は厚みの真ん中に置く。"""
+    """厚みを付けた立体に、磁石の穴を開ける。穴の中心は厚みの真ん中に置く。
+
+    N 極を外へ向ける穴には、穴の真下（殻の内側の面）に印の突起を付ける。
+    """
     solid = thicken(region, thickness)
     for pocket in pockets:
         axis = pocket.into / np.linalg.norm(pocket.into)
         side = np.cross(pocket.normal, axis)
         up = np.cross(axis, side)
+        if pocket.north_out:
+            root = pocket.point - pocket.normal * (thickness - MARK_ROOT) + axis * hole_depth / 2
+            mark = manifold3d.Manifold.cylinder(
+                MARK_HEIGHT + MARK_ROOT, MARK_DIAMETER / 2, circular_segments=POCKET_SEGMENTS
+            ).transform(np.column_stack([axis, side, -pocket.normal, root]))
+            solid = solid + mark
         start = pocket.point - pocket.normal * thickness / 2 - axis * POCKET_OVERSHOOT
         # 円柱は z 軸に沿って作られるので、z 軸を掘る向きに合わせる
         transform = np.column_stack([side, up, axis, start])

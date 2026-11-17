@@ -35,13 +35,16 @@ SUBDIVISIONS = 6  # 辺の長さは約 1.4 mm
 # 磁石は直径 6 mm、厚さ 3 mm。穴の余裕は直径 +0.2 mm、最小の肉厚は 0.8 mm（REQUIREMENTS.md）
 MAGNET_DIAMETER, MAGNET_THICKNESS, HOLE_MARGIN, MIN_WALL = 6.0, 3.0, 0.2, 0.8
 
-# 接触の台。長さは両側の「磁石の厚さ＋奥の壁」、幅は「磁石の穴の直径＋両側の壁」
+# ピースの縁は、メッシュの辺の上の点を直線でつないで作るので、角が丸まって少し内側に入る。
+# その分の余裕。辺の長さ 1.4 mm の約3割
+CONTOUR_ALLOWANCE = 0.4
+# 接触の台。長さは両側の「磁石の厚さ＋奥の壁」、幅は「磁石の穴の直径＋両側の壁」。壁には余裕を足す
 PAD = PadSize(
-    length=2 * (MAGNET_THICKNESS + MIN_WALL),
-    width=MAGNET_DIAMETER + HOLE_MARGIN + 2 * MIN_WALL,
+    length=2 * (MAGNET_THICKNESS + MIN_WALL + CONTOUR_ALLOWANCE),
+    width=MAGNET_DIAMETER + HOLE_MARGIN + 2 * (MIN_WALL + CONTOUR_ALLOWANCE),
 )
 # 接触として採用する切り口の最小の幅。磁石の直径の半分。
-# これより狭い重なりでは、台が字の輪郭から片側 2.4 mm より大きくはみ出す
+# これより狭い重なりでは、台が字の輪郭から片側 2.8 mm より大きくはみ出す
 MIN_CONTACT = MAGNET_DIAMETER / 2
 # 1つのピースに要る接触の数。2か所だと、その2点を軸に回って外れる（TESTLIST.md の3番）
 MIN_CONTACTS_PER_PIECE = 3
@@ -52,7 +55,7 @@ MARK_RADIUS = 2.0
 
 PARAMS = LayoutParams(
     sizes=(60.0, 52.0, 46.0),
-    # 字どうしが重なってよい深さ。線の端の丸み（半径 約6.5 mm）どうしが台の幅 7.8 mm で
+    # 字どうしが重なってよい深さ。線の端の丸み（半径 約6.5 mm）どうしが磁石の穴と壁の幅 7.8 mm で
     # 接するには、両側あわせて約 2.6 mm 重なる必要がある
     max_overlap=3.0,
     min_contact=MIN_CONTACT,

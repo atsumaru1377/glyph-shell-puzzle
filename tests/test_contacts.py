@@ -128,3 +128,42 @@ def test_外したピースのせいで足りなくなったピースも外す()
     # 鎖のようにつながるだけなので、端から順に全部外れる
     contacts = [contact(0, 1), contact(1, 2), contact(2, 3)]
     assert stable_pieces(4, contacts, minimum=3) == []
+
+
+def test_台の中では接触面の平面でピースが分かれる(sphere, placements, contacts):
+    pieces = piece_fields(sphere, placements, contacts, PAD)
+    for contact in contacts:
+        offset = sphere.vertices - contact.point
+        along = offset @ contact.direction
+        across = offset @ np.cross(contact.normal, contact.direction)
+        # 台の縁から頂点1つぶん内側の頂点だけを見る
+        inner = (
+            (np.abs(along) < PAD.length / 2 - 1.5)
+            & (np.abs(across) < PAD.width / 2 - 1.5)
+            & (np.linalg.norm(offset, axis=1) < PAD.width)
+        )
+        assert (pieces[contact.a, inner & (along < 0)] < 0).all()
+        assert (pieces[contact.b, inner & (along > 0)] < 0).all()
+
+
+def test_接触面でピースどうしの間に隙間ができない(sphere, placements, contacts):
+    pieces = piece_fields(sphere, placements, contacts, PAD)
+    for contact in contacts:
+        offset = sphere.vertices - contact.point
+        along = offset @ contact.direction
+        across = offset @ np.cross(contact.normal, contact.direction)
+        inner = (
+            (np.abs(along) < PAD.length / 2 - 1.5)
+            & (np.abs(across) < PAD.width / 2 - 1.5)
+            & (np.linalg.norm(offset, axis=1) < PAD.width)
+        )
+        # 接触面の近くでは、値が接触面からの距離そのものになる（傾きが 1）
+        beside = inner & (np.abs(along) < 1.0)
+        assert pieces[contact.a, beside] == pytest.approx(along[beside], abs=1e-9)
+        assert pieces[contact.b, beside] == pytest.approx(-along[beside], abs=1e-9)
+
+
+def test_接触面の中心は曲面の上にあり法線はその場所のもの(sphere, contacts):
+    for contact in contacts:
+        assert np.linalg.norm(contact.point) == pytest.approx(40.0, abs=0.05)
+        assert contact.normal @ contact.point / np.linalg.norm(contact.point) == pytest.approx(1.0, abs=1e-3)

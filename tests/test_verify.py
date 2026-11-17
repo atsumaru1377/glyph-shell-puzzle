@@ -4,6 +4,11 @@ import pytest
 
 from glyphshell.verify import (
     ContactFrame,
+    assign_polarity,
+    attracts,
+    fit_transforms,
+    overlapping_contacts,
+    removal_order,
     false_fits,
     overlap_volume,
     removal_direction,
@@ -117,3 +122,64 @@ def test_裏返さないと重ならない鏡写しの並びははまらない()
     flip = np.array([-1.0, 1.0, 1.0])
     mirrored = [ContactFrame(f.point * flip, f.outward * flip, UP) for f in a]
     assert false_fits([a, mirrored], position_tolerance=3.0, angle_tolerance=np.radians(20)) == []
+
+
+# test list 5 と 9: 磁石の向きで、間違った置き方を反発させる
+def _numbered(points, first):
+    """接触の番号つきの並び。points は (番号, 位置, 外向き) の列。"""
+    return [
+        ContactFrame(np.array(p, dtype=float), np.array(d, dtype=float), UP, contact=c, first=first)
+        for c, p, d in points
+    ]
+
+
+def test_動かしたピースと重なる接触の組を返す():
+    a = _numbered([(0, (0, 0, 0), (-1, 0, 0)), (1, (30, 0, 0), (1, 0, 0)), (2, (10, 25, 0), (0, 1, 0))], True)
+    shift = np.array([100.0, 5.0, 0.0])
+    b = [ContactFrame(f.point + shift, f.outward, UP, contact=3 + k, first=True) for k, f in enumerate(a)]
+    transforms = fit_transforms(a, b, False, 3.0, np.radians(20))
+    assert len(transforms) == 1
+    assert overlapping_contacts(a, b, transforms[0], 3.0, np.radians(20)) == [(0, 0), (1, 1), (2, 2)]
+
+
+def test_同じ向きの磁石どうしの置き方は引き合い1つでも逆なら引き合わない():
+    a = _numbered([(0, (0, 0, 0), (-1, 0, 0)), (1, (30, 0, 0), (1, 0, 0)), (2, (10, 25, 0), (0, 1, 0))], True)
+    b = _numbered([(3, (0, 0, 0), (-1, 0, 0)), (4, (30, 0, 0), (1, 0, 0)), (5, (10, 25, 0), (0, 1, 0))], True)
+    pairs = list(zip(a, b))
+    assert attracts(pairs, np.array([True, True, True, True, True, True]))
+    assert not attracts(pairs, np.array([True, True, True, True, True, False]))
+
+
+def test_決めた磁石の向きでは間違った置き方がどれも引き合わない():
+    a = _numbered([(0, (0, 0, 0), (-1, 0, 0)), (1, (30, 0, 0), (1, 0, 0)), (2, (10, 25, 0), (0, 1, 0))], True)
+    b = _numbered([(3, (0, 0, 0), (-1, 0, 0)), (4, (30, 0, 0), (1, 0, 0)), (5, (10, 25, 0), (0, 1, 0))], True)
+    c = _numbered([(6, (0, 0, 0), (-1, 0, 0)), (7, (30, 0, 0), (1, 0, 0)), (8, (10, 25, 0), (0, 1, 0))], False)
+    wrong = [list(zip(a, b)), list(zip(b, c)), list(zip(a, c))]
+    polarity = assign_polarity(9, wrong, seed=0)
+    assert not any(attracts(pairs, polarity) for pairs in wrong)
+
+
+def test_接触が入れ替わるだけの置き方は向きを混ぜれば反発する():
+    # 3回対称のピースを回す置き方。接触が 0→1→2→0 と入れ替わるので、3つが同じ向きのときだけ引き合う
+    a = _numbered([(0, (0, 0, 0), (-1, 0, 0)), (1, (30, 0, 0), (1, 0, 0)), (2, (10, 25, 0), (0, 1, 0))], True)
+    rotated = [(a[0], a[1]), (a[1], a[2]), (a[2], a[0])]
+    polarity = assign_polarity(3, [rotated], seed=0)
+    assert len(set(polarity.tolist())) == 2
+
+
+def test_反発させようのない置き方があれば例外():
+    # 重なるのが「同じ接触の同じ側」だけなら、向きをどう決めても引き合う
+    a = _numbered([(0, (0, 0, 0), (-1, 0, 0))], True)
+    with pytest.raises(ValueError):
+        assign_polarity(1, [[(a[0], a[0])]], seed=0)
+
+
+# test list 4: 決まった順に入れれば、どのピースも外から入れられる
+def test_ふさぐピースを先に抜く順を返す():
+    # 0 は 1 にふさがれ、1 は 2 にふさがれる
+    assert removal_order([[1], [2], []]) == [2, 1, 0]
+
+
+def test_互いにふさぎ合うと例外():
+    with pytest.raises(ValueError):
+        removal_order([[1], [0]])

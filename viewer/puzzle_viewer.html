@@ -1,0 +1,407 @@
+<title>字形の殻パズル ビューワー</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap">
+<style>
+  /* 配置: 左に立体（主役）、右に操作とピースの一覧。狭い画面では縦に積む */
+  :root {
+    --bg: #f3f5f7;
+    --panel: #ffffff;
+    --stage: #e4e8ec;
+    --fg: #1c2530;
+    --muted: #5d6b79;
+    --line: #cfd6dd;
+    --accent: #1f6f8b;
+    --accent-fg: #ffffff;
+    --ok: #1d7a4f;
+    --north: #c8384a;
+    --south: #2f63b8;
+    --font: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171c; --panel: #1b222a; --stage: #0c1014; --fg: #e8edf2; --muted: #9aa8b5;
+      --line: #313c47; --accent: #62b6d1; --accent-fg: #0c1014; --ok: #5fc892;
+      --north: #f07282; --south: #7ba6ee; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12171c; --panel: #1b222a; --stage: #0c1014; --fg: #e8edf2; --muted: #9aa8b5;
+    --line: #313c47; --accent: #62b6d1; --accent-fg: #0c1014; --ok: #5fc892;
+    --north: #f07282; --south: #7ba6ee; color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.6;
+    padding-block: 20px 32px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .page { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 20px; }
+  h1 { font-size: 22px; font-weight: 900; margin: 0; letter-spacing: 0.02em; text-wrap: balance; }
+  .lede { margin: 0; color: var(--muted); font-size: 14px; }
+
+  .facts { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 0; padding: 0; list-style: none; }
+  .facts li { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); }
+  .facts b { font-size: 18px; font-weight: 700; color: var(--fg); font-variant-numeric: tabular-nums; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .stage {
+    position: relative; background: var(--stage); border: 1px solid var(--line); border-radius: 10px;
+    aspect-ratio: 1 / 1; max-height: 78vh; width: 100%; overflow: hidden; touch-action: none;
+  }
+  .stage canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  .stage canvas:active { cursor: grabbing; }
+  .hint { position: absolute; left: 12px; bottom: 10px; margin: 0; font-size: 12px; color: var(--muted); pointer-events: none; }
+  .status { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: var(--muted); font-size: 14px; padding: 16px; text-align: center; }
+
+  .side { display: grid; gap: 14px; min-width: 0; }
+  .block { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 10px; min-width: 0; }
+  h2 { font-size: 13px; font-weight: 700; margin: 0; color: var(--muted); letter-spacing: 0.08em; }
+
+  .control { display: grid; gap: 4px; }
+  .control label { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 500; }
+  .control output { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  input[type="range"] { width: 100%; accent-color: var(--accent); margin: 0; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+  .check input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 0; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+  .dot.n { background: var(--north); } .dot.s { background: var(--south); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font: inherit; font-weight: 900; font-size: 17px; line-height: 1; width: 36px; height: 36px;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; padding: 0;
+  }
+  .chip:hover { border-color: var(--accent); }
+  .chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .chip.hidden-step { opacity: 0.35; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .detail { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 14px; }
+  .detail dt { color: var(--muted); }
+  .detail dd { margin: 0; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+  .detail .file { font-family: var(--mono); font-size: 12px; }
+  .empty { margin: 0; font-size: 14px; color: var(--muted); }
+
+  .checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+  .checks li { display: grid; grid-template-columns: 4.6em 1fr; gap: 8px; }
+  .verdict { font-weight: 700; color: var(--ok); }
+  .verdict.note { color: var(--muted); }
+  .order { font-size: 17px; font-weight: 900; letter-spacing: 0.12em; overflow-wrap: anywhere; margin: 0; line-height: 1.5; }
+  .small { font-size: 12px; color: var(--muted); margin: 0; }
+</style>
+
+<div class="page">
+  <header>
+    <h1>字形の殻パズル</h1>
+    <p class="lede">文字と記号の形をしたピースを、磁石でつないで球にする立体パズル</p>
+  </header>
+
+  <ul class="facts" id="facts" aria-label="全体の数値"></ul>
+
+  <div class="layout">
+    <div class="stage" id="stage">
+      <canvas id="canvas" aria-label="パズルの立体表示"></canvas>
+      <p class="status" id="status">形を読み込んでいます</p>
+      <p class="hint">ドラッグで回す ／ ホイールかピンチで拡大 ／ ピースをクリックで選ぶ</p>
+    </div>
+
+    <div class="side">
+      <section class="block" aria-labelledby="h-view">
+        <h2 id="h-view">表示</h2>
+        <div class="control">
+          <label for="explode">ばらす <output id="explode-out" for="explode">0 mm</output></label>
+          <input type="range" id="explode" min="0" max="60" step="1" value="0">
+        </div>
+        <div class="control">
+          <label for="step">組立の手順 <output id="step-out" for="step"></output></label>
+          <input type="range" id="step" min="1" max="1" step="1" value="1">
+        </div>
+        <label class="check"><input type="checkbox" id="magnets" checked> 磁石を表示（ばらすと見える）</label>
+        <p class="legend">
+          <span><span class="dot n"></span>N極が外向き（穴の下に突起の印あり）</span>
+          <span><span class="dot s"></span>S極が外向き</span>
+        </p>
+      </section>
+
+      <section class="block" aria-labelledby="h-piece">
+        <h2 id="h-piece">選んだピース</h2>
+        <div id="detail"><p class="empty">ピースをクリックするか、下の一覧から選んでください。</p></div>
+        <div class="chips" id="chips" role="group" aria-label="ピースの一覧"></div>
+      </section>
+
+      <section class="block" aria-labelledby="h-check">
+        <h2 id="h-check">計算での検証</h2>
+        <ul class="checks" id="checks"></ul>
+        <p class="small">組み立てる順（左から）</p>
+        <p class="order" id="order"></p>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  "use strict";
+  var PALETTE = [0x3d7ea6, 0x2a9d8f, 0x6c7bd1, 0xe76f51, 0xe9b44c, 0xa17c6b, 0x7d8f98];
+  var canvas = document.getElementById("canvas");
+  var stage = document.getElementById("stage");
+  var statusEl = document.getElementById("status");
+
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function bytes(text) {
+    var raw = atob(text), out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out.buffer;
+  }
+  function el(tag, attrs, text) {
+    var node = document.createElement(tag);
+    for (var key in attrs || {}) node.setAttribute(key, attrs[key]);
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  fetch("viewer_data.json")
+    .then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    })
+    .then(start)
+    .catch(function (error) {
+      statusEl.textContent = "形のデータを読み込めませんでした（" + error.message + "）。ページを開き直してください。";
+    });
+
+  function start(data) {
+    statusEl.hidden = true;
+    var pieces = data.pieces, count = pieces.length, report = data.report;
+    var selected = -1, dirty = true;
+
+    // ---- 数値 ----
+    var facts = [
+      [count, "ピース"],
+      [report.magnets, "個の磁石"],
+      [data.diameter + " mm", "球の直径"],
+      [data.thickness + " mm", "殻の厚さ"],
+      ["直径 " + data.magnet.diameter + " × 厚さ " + data.magnet.thickness + " mm", "磁石の寸法"]
+    ];
+    facts.forEach(function (fact) {
+      var li = el("li");
+      li.appendChild(el("b", {}, String(fact[0])));
+      li.appendChild(document.createTextNode(fact[1]));
+      document.getElementById("facts").appendChild(li);
+    });
+
+    // ---- 検証の結果 ----
+    var checks = [
+      [report.test2_overlaps.length === 0, "ピースどうしの重なり " + report.test2_overlaps.length + " 件"],
+      [report.test3_short_of_contacts.length === 0, "どのピースも 3 か所以上で隣とつながる（接触 " + report.contacts + " か所）"],
+      [report.test6_thin_walls.length === 0, "磁石の穴のまわりの肉厚 0.8 mm 以上"],
+      [report.test9_same_poles.length === 0, "どの接触も、両側の磁石の極が逆を向く"],
+      [report.test5_wrong_fits_attracting === 0, "別の場所に付く置き方 " + report.test5_wrong_fits_checked + " 通りは、どれも磁石が反発する"],
+      [true, report.test4_insert_before.length === 0
+        ? "どのピースも、ほかが全部ある状態で外から入る"
+        : "下の順に入れれば、どのピースも外から入る（順が要る組 " + report.test4_insert_before.length + " つ）"]
+    ];
+    checks.forEach(function (check) {
+      var li = el("li");
+      li.appendChild(el("span", { "class": "verdict" + (check[0] ? "" : " note") }, check[0] ? "合格" : "不合格"));
+      li.appendChild(el("span", {}, check[1]));
+      document.getElementById("checks").appendChild(li);
+    });
+    document.getElementById("order").textContent = report.assembly_order;
+
+    // ---- 立体 ----
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(32, 1, 10, 4000);
+    var distance = data.diameter * 2.6;
+    camera.position.set(0, 0, distance);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x556070, 0.95));
+    var sun = new THREE.DirectionalLight(0xffffff, 0.65);
+    sun.position.set(1.2, 1.6, 2.2);
+    scene.add(sun);
+    var group = new THREE.Group();
+    group.rotation.set(0.35, -0.5, 0);
+    scene.add(group);
+
+    var magnetShape = new THREE.CylinderGeometry(data.magnet.diameter / 2, data.magnet.diameter / 2, data.magnet.thickness, 24);
+    var northMaterial = new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.3 });
+    var southMaterial = new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.3 });
+    var magnetMeshes = [];
+
+    var meshes = pieces.map(function (piece, i) {
+      var geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(bytes(piece.positions)), 3));
+      geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(piece.indices)), 1));
+      var material = new THREE.MeshStandardMaterial({ color: PALETTE[i % PALETTE.length], roughness: 0.75, metalness: 0.0, flatShading: true });
+      var mesh = new THREE.Mesh(geometry, material);
+      mesh.userData.index = i;
+      group.add(mesh);
+      return mesh;
+    });
+
+    // 磁石は、それぞれのピースの子にする。ばらすとピースと一緒に動く
+    var up = new THREE.Vector3(0, 1, 0);
+    data.contacts.forEach(function (contact) {
+      var direction = new THREE.Vector3().fromArray(contact.direction);
+      [[contact.a, -1, contact.northOnA], [contact.b, 1, !contact.northOnA]].forEach(function (side) {
+        var magnet = new THREE.Mesh(magnetShape, side[2] ? northMaterial : southMaterial);
+        magnet.position.fromArray(contact.point).addScaledVector(direction, side[1] * data.magnet.thickness / 2);
+        magnet.quaternion.setFromUnitVectors(up, direction);
+        meshes[side[0]].add(magnet);
+        magnetMeshes.push(magnet);
+      });
+    });
+
+    function paint() {
+      scene.background = new THREE.Color(css("--stage"));
+      northMaterial.color.set(css("--north"));
+      southMaterial.color.set(css("--south"));
+      dirty = true;
+    }
+    paint();
+    new MutationObserver(paint).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", paint);
+
+    function resize() {
+      var width = stage.clientWidth, height = stage.clientHeight;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      dirty = true;
+    }
+    new ResizeObserver(resize).observe(stage);
+    resize();
+
+    // ---- 操作 ----
+    var explode = document.getElementById("explode");
+    var step = document.getElementById("step");
+    var magnets = document.getElementById("magnets");
+    step.max = count;
+    step.value = count;
+
+    function apply() {
+      var amount = Number(explode.value), upTo = Number(step.value);
+      document.getElementById("explode-out").textContent = amount + " mm";
+      document.getElementById("step-out").textContent = upTo + " / " + count + " 個め";
+      meshes.forEach(function (mesh, i) {
+        var piece = pieces[i];
+        mesh.visible = piece.step <= upTo;
+        mesh.position.fromArray(piece.direction).multiplyScalar(amount);
+        var latest = upTo < count && piece.step === upTo;
+        var lit = i === selected || latest;
+        mesh.material.emissive.setHex(lit ? 0x555555 : 0x000000);
+        mesh.material.opacity = selected >= 0 && i !== selected ? 0.35 : 1;
+        mesh.material.transparent = mesh.material.opacity < 1;
+        chipNodes[i].classList.toggle("hidden-step", !mesh.visible);
+        chipNodes[i].setAttribute("aria-pressed", String(i === selected));
+      });
+      magnetMeshes.forEach(function (magnet) { magnet.visible = magnets.checked; });
+      dirty = true;
+    }
+
+    var detail = document.getElementById("detail");
+    function select(index) {
+      selected = index === selected ? -1 : index;
+      detail.textContent = "";
+      if (selected < 0) {
+        detail.appendChild(el("p", { "class": "empty" }, "ピースをクリックするか、下の一覧から選んでください。"));
+      } else {
+        var piece = pieces[selected], list = el("dl", { "class": "detail" });
+        [
+          ["字", piece.char],
+          ["入れる順", piece.step + " / " + count + " 個め"],
+          ["字の高さ", piece.size + " mm"],
+          ["磁石", piece.magnets + " 個（N極が外向き " + piece.northOut + "、S極が外向き " + (piece.magnets - piece.northOut) + "）"],
+          ["印刷する形", piece.file]
+        ].forEach(function (row, k) {
+          list.appendChild(el("dt", {}, row[0]));
+          list.appendChild(el("dd", k === 4 ? { "class": "file" } : {}, String(row[1])));
+        });
+        detail.appendChild(list);
+      }
+      apply();
+    }
+
+    var chipNodes = pieces.map(function (piece, i) {
+      var chip = el("button", { type: "button", "class": "chip", "aria-pressed": "false", title: piece.char + "（" + piece.step + " 個め）" }, piece.char);
+      chip.addEventListener("click", function () { select(i); });
+      document.getElementById("chips").appendChild(chip);
+      return chip;
+    });
+
+    explode.addEventListener("input", apply);
+    step.addEventListener("input", apply);
+    magnets.addEventListener("change", apply);
+
+    // 回す・拡大する・選ぶ
+    var pointers = new Map(), moved = 0, pinch = 0;
+    var raycaster = new THREE.Raycaster(), axisX = new THREE.Vector3(1, 0, 0), axisY = new THREE.Vector3(0, 1, 0), turn = new THREE.Quaternion();
+    function zoom(factor) {
+      distance = Math.min(data.diameter * 6, Math.max(data.diameter * 1.1, distance * factor));
+      camera.position.set(0, 0, distance);
+      dirty = true;
+    }
+    canvas.addEventListener("pointerdown", function (event) {
+      canvas.setPointerCapture(event.pointerId);
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      moved = 0;
+      pinch = 0;
+    });
+    canvas.addEventListener("pointermove", function (event) {
+      var last = pointers.get(event.pointerId);
+      if (!last) return;
+      var dx = event.clientX - last.x, dy = event.clientY - last.y;
+      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pointers.size === 1) {
+        moved += Math.abs(dx) + Math.abs(dy);
+        turn.setFromAxisAngle(axisY, dx * 0.008);
+        group.quaternion.premultiply(turn);
+        turn.setFromAxisAngle(axisX, dy * 0.008);
+        group.quaternion.premultiply(turn);
+        dirty = true;
+      } else if (pointers.size === 2) {
+        var both = Array.from(pointers.values());
+        var span = Math.hypot(both[0].x - both[1].x, both[0].y - both[1].y);
+        if (pinch > 0) zoom(pinch / span);
+        pinch = span;
+        moved += 10;
+      }
+    });
+    function release(event) {
+      if (pointers.size === 1 && moved < 5 && event.type === "pointerup") {
+        var box = canvas.getBoundingClientRect();
+        var spot = new THREE.Vector2(((event.clientX - box.left) / box.width) * 2 - 1, -((event.clientY - box.top) / box.height) * 2 + 1);
+        raycaster.setFromCamera(spot, camera);
+        var hits = raycaster.intersectObjects(meshes.filter(function (mesh) { return mesh.visible; }), false);
+        if (hits.length) select(hits[0].object.userData.index);
+      }
+      pointers.delete(event.pointerId);
+      pinch = 0;
+    }
+    canvas.addEventListener("pointerup", release);
+    canvas.addEventListener("pointercancel", release);
+    canvas.addEventListener("wheel", function (event) {
+      event.preventDefault();
+      zoom(event.deltaY > 0 ? 1.08 : 1 / 1.08);
+    }, { passive: false });
+
+    apply();
+    (function frame() {
+      if (dirty) { renderer.render(scene, camera); dirty = false; }
+      requestAnimationFrame(frame);
+    })();
+  }
+})();
+</script>

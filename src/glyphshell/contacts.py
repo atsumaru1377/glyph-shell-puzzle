@@ -144,7 +144,18 @@ def find_contacts(
                 if width < min_width:
                     continue
                 centre = point + (steps[first] + steps[last]) / 2 * tangent
-                contacts.append(Contact(a, b, centre, normal, direction, width))
+                # 中心を動かしたので、法線をその場所で取り直し、中心を曲面の上へ戻す。
+                # 接触面は法線を含む平面にする。そうしないと、法線に沿って作るピースの壁が
+                # 厚みの奥で平面から離れる
+                close = np.linalg.norm(positions - centre, axis=1) < FIT_RADIUS
+                here = np.array(
+                    [_fit(positions[close], surface.normals[both][close][:, k], normal, centre)[0] for k in range(3)]
+                )
+                here /= np.linalg.norm(here)
+                anchor = positions[np.linalg.norm(positions - centre, axis=1).argmin()]
+                centre = centre - ((centre - anchor) @ here) * here
+                facing = direction - (direction @ here) * here
+                contacts.append(Contact(a, b, centre, here, facing / np.linalg.norm(facing), width))
     contacts.sort(key=lambda contact: -contact.width)
 
     accepted: list[Contact] = []
@@ -184,19 +195,24 @@ def piece_fields(
     """[ピース, 頂点] の値を返す。負の頂点がそのピースの内側。
 
     ピースは、字に接触の台の半分を足し、ほかのピースのほうが近い所（重なりの向こう半分）を
-    取り除いた形。どの頂点も、内側になるピースは多くても1つ。辺の上で値を直線で補間しても、
+    取り除いた形。台の中では、接触面の平面で両側のピースを分ける。どの頂点も、内側になるピースは多くても1つ。辺の上で値を直線で補間しても、
     2つのピースの内側は重ならない。
     """
     raw = dense_fields(placements, len(surface.vertices))
     for contact in contacts:
         index, along, across = _pad_coordinates(surface, contact, pad)
         box = _pad_box(along, across, pad)
-        raw[contact.a, index] = np.minimum(raw[contact.a, index], np.maximum(box, along))
-        raw[contact.b, index] = np.minimum(raw[contact.b, index], np.maximum(box, -along))
+        for piece, side in ((contact.a, along), (contact.b, -along)):
+            half = np.maximum(box, side)
+            # 台の中は、接触面（平面）だけで両側を分ける。字の輪郭から等しい距離の線は平面から
+            # 少しずれるので、台の中でもそれを使うと、磁石の穴の口が壁の面とそろわない
+            raw[piece, index] = np.where(box < 0, half, np.minimum(raw[piece, index], half))
     order = np.argsort(raw, axis=0)[:2]
     lowest = np.take_along_axis(raw, order[:1], axis=0)[0]
     second = np.take_along_axis(raw, order[1:2], axis=0)[0]
     others = np.where(np.arange(len(raw))[:, None] == order[0][None, :], second, lowest)
+    # ほかのピースとの境は (自分の値 − 相手の値) / 2 が 0 の所。2 で割るのは、境の両側で値の
+    # 傾きをそろえるため。割らないと、辺の上で 0 になる点が境より手前にずれて隙間ができる
     with np.errstate(invalid="ignore"):
-        trimmed = np.maximum(raw, raw - others)
+        trimmed = np.maximum(raw, (raw - others) / 2)
     return np.where(np.isfinite(raw), trimmed, np.inf)

@@ -71,3 +71,16 @@ def test_磁石の穴を開けると円柱ぶんの体積が減る(sphere):
     removed = plain.volume() - drilled.volume()
     assert removed == pytest.approx(np.pi * 3.1**2 * 3.0, rel=0.1)
     assert drilled.status().name == "NoError"
+
+
+def test_N極を外へ向ける穴には内側の面に印の突起が付く(sphere):
+    region = clip_region(sphere, _cap_field(sphere, (0, 0, 1), 15.0))
+    edge = np.array([np.sin(15.0 / RADIUS), 0.0, np.cos(15.0 / RADIUS)])
+    inward = np.array([-np.cos(15.0 / RADIUS), 0.0, np.sin(15.0 / RADIUS)])
+    plain = piece_solid(region, THICKNESS, [Pocket(edge * RADIUS, edge, inward)], 6.2, 3.0)
+    marked = piece_solid(region, THICKNESS, [Pocket(edge * RADIUS, edge, inward, north_out=True)], 6.2, 3.0)
+    added = marked.volume() - plain.volume()
+    assert added == pytest.approx(np.pi * 1.2**2 * 0.8, rel=0.15)
+    # 突起は殻の内側の面（半径 RADIUS − THICKNESS）より中心側へ出る
+    inner_most = np.linalg.norm(np.asarray(marked.to_mesh().vert_properties)[:, :3], axis=1).min()
+    assert inner_most == pytest.approx(RADIUS - THICKNESS - 0.8, abs=0.1)
