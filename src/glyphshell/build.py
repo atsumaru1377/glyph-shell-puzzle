@@ -3,6 +3,7 @@
     uv run python -m glyphshell.build
 """
 
+import string
 import time
 from pathlib import Path
 
@@ -14,8 +15,16 @@ from glyphshell.preview import region_fields, render, write_png
 from glyphshell.sdf import glyph_field
 from glyphshell.surface import icosphere
 
-FONT = ("/System/Library/Fonts/Avenir Next.ttc", 8)  # Avenir Next Heavy
-CHARS = [chr(code) for code in range(33, 127)]
+# 字の出どころ。(書体のファイル, 書体の番号, 使う字)
+# 小さい記号（. , ' ` - など）は使わない。絵の記号は Avenir Next に無いので別の書体から取る。
+SOURCES = [
+    (
+        "/System/Library/Fonts/Avenir Next.ttc",  # Avenir Next Heavy
+        8,
+        string.ascii_uppercase + string.ascii_lowercase + string.digits + "#$&@",
+    ),
+    ("/System/Library/Fonts/Supplemental/Arial Unicode.ttf", 0, "♥♠♣♦★✿☂☻✦✚✔"),
+]
 RADIUS = 75.0
 SUBDIVISIONS = 6  # 辺の長さは約 1.4 mm
 
@@ -23,10 +32,11 @@ SUBDIVISIONS = 6  # 辺の長さは約 1.4 mm
 MAGNET_DIAMETER, MAGNET_THICKNESS, HOLE_MARGIN, MIN_WALL = 6.0, 3.0, 0.2, 0.8
 
 PARAMS = LayoutParams(
-    sizes=(64.0, 50.0, 40.0, 32.0),
+    sizes=(52.0, 46.0, 40.0),
     min_gap=1.5,  # メッシュの辺の長さ 1.4 mm 以上
     reach=4.0,
     rotations=24,
+    candidates=16,
     min_neck=MAGNET_THICKNESS + MIN_WALL,
     min_extent=MAGNET_DIAMETER + HOLE_MARGIN + 2 * MIN_WALL,
     seed=1,
@@ -35,13 +45,14 @@ OUT = Path("out")
 
 
 def main() -> None:
-    font = load_font(*FONT)
     started = time.time()
     fields = []
-    for char in CHARS:
-        shape = glyph_shape(font, char)
-        if is_single_piece(shape):
-            fields.append(glyph_field(char, shape))
+    for path, face_index, chars in SOURCES:
+        font = load_font(path, face_index)
+        for char in chars:
+            shape = glyph_shape(font, char)
+            if is_single_piece(shape):
+                fields.append(glyph_field(char, shape))
     print(f"使える字 {len(fields)} 個の距離の格子を作った（{time.time() - started:.0f} 秒）")
 
     surface = icosphere(RADIUS, SUBDIVISIONS)

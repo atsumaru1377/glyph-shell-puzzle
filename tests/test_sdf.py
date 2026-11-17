@@ -1,6 +1,6 @@
 import numpy as np
 import pytest
-from shapely.geometry import box
+from shapely.geometry import Point, box
 
 from glyphshell.sdf import glyph_field, signed_distance
 
@@ -48,3 +48,17 @@ def test_いちばん細い所の幅と箱の短い辺を持つ():
     wide = glyph_field("▭", box(0.0, 0.0, 4.0, 1.0))
     assert wide.neck == pytest.approx(1.0, abs=0.02)
     assert wide.min_extent == pytest.approx(1.0)
+
+
+def test_穴を埋めた距離では穴の中も内側になる():
+    ring = glyph_field("o", Point(0, 0).buffer(1.0).difference(Point(0, 0).buffer(0.6)))
+    centre = np.array([[0.0, 0.0]])
+    assert signed_distance(ring, centre, size=1.0, angle=0.0)[0] == pytest.approx(0.6, abs=0.02)
+    assert signed_distance(ring, centre, size=1.0, angle=0.0, solid=True)[0] == pytest.approx(-1.0, abs=0.02)
+
+
+def test_離れた形は格子にできない():
+    from shapely.ops import unary_union
+
+    with pytest.raises(ValueError):
+        glyph_field("x", unary_union([box(0, 0, 1, 1), box(2, 0, 3, 1)]))

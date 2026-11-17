@@ -12,6 +12,7 @@ PARAMS = LayoutParams(
     min_gap=3.0,
     reach=6.0,
     rotations=8,
+    candidates=6,
     min_neck=3.8,
     min_extent=7.8,
     seed=1,
@@ -79,3 +80,26 @@ def test_離れた字どうしの隙間は無限大(placements):
         default=np.inf,
     )
     assert far > 0
+
+
+def test_字の穴の中には別の字を置かない(sphere):
+    ring = glyph_field("o", Point(0, 0).buffer(1.0).difference(Point(0, 0).buffer(0.75)))
+    dot = glyph_field("c", Point(0, 0).buffer(0.5))
+    params = LayoutParams(
+        sizes=(30.0, 12.0), min_gap=3.0, reach=6.0, rotations=4, candidates=2, min_neck=3.8, min_extent=7.8, seed=1
+    )
+    placements = pack(sphere, [ring, dot], params)
+    assert [p.char for p in placements][0] == "o"
+    ring_placed = placements[0]
+    hole = ring_placed.index[(ring_placed.solid < 0) & (ring_placed.distance > 0)]
+    assert len(hole) > 0
+    for other in placements[1:]:
+        inside_other = other.index[other.distance < 0]
+        assert len(np.intersect1d(hole, inside_other)) == 0
+
+
+def test_1か所で試す字の数を絞ると選ばれる字が変わる(sphere, fields, placements):
+    narrow = LayoutParams(**{**PARAMS.__dict__, "candidates": 1})
+    chars = [p.char for p in pack(sphere, fields, narrow)]
+    assert len(chars) == len(set(chars))
+    assert chars != [p.char for p in placements]

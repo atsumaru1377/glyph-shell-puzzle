@@ -19,6 +19,7 @@ class LayoutParams:
     min_gap: float  # 字の輪郭どうしの最小の隙間。メッシュの辺の長さ以上にする
     reach: float  # 隣とつなぐ（橋渡しする）隙間の上限
     rotations: int  # 試す向きの数（1周を等分する）
+    candidates: int  # 1か所につき試す字の数。まだ使っていない字から無作為に選ぶ
     min_neck: float  # 字のいちばん細い所に要る幅
     min_extent: float  # 字の外接する箱の短い辺に要る長さ
     seed: int
@@ -33,6 +34,7 @@ class Placement:
     size: float
     index: np.ndarray  # 字の距離を持つ頂点の番号
     distance: np.ndarray  # その頂点から字の輪郭までの符号付き距離（内側が負）
+    solid: np.ndarray  # 字の穴を埋めた形までの符号付き距離。字を置く場所を決めるのに使う
 
 
 def separation(a: Placement, b: Placement) -> float:
@@ -74,7 +76,8 @@ def _best_at(
     uv_norm = np.linalg.norm(uv, axis=1)
     angles = rng.uniform(0, 2 * np.pi) + np.arange(params.rotations) * 2 * np.pi / params.rotations
     cos, sin = np.cos(angles)[None, :, None], np.sin(angles)[None, :, None]
-    order = rng.permutation(len(unused))
+    # 毎回すべての字を試すと、面積の大きい字ばかりが選ばれて字の種類が偏る
+    order = rng.permutation(len(unused))[: params.candidates]
 
     best = None
     for k in order:
@@ -96,7 +99,8 @@ def _best_at(
                 ],
                 axis=-1,
             )
-            distance = signed_distance(field, rotated, size, angle=0.0)
+            # 字の穴の中に別の字を置かないよう、穴を埋めた形で隙間を測る
+            distance = signed_distance(field, rotated, size, angle=0.0, solid=True)
             total = occupied[near][None, None, :] + distance
             valid = total.min(axis=2) >= params.min_gap
             if not valid.any():
@@ -107,11 +111,11 @@ def _best_at(
             gain = np.where(valid, gain, -1)
             o, r = np.unravel_index(gain.argmax(), gain.shape)
             if best is None or gain[o, r] > best[0]:
-                best = (int(gain[o, r]), field, size, o, r, index[near], distance[o, r])
+                best = (int(gain[o, r]), field, size, o, r, index[near], rotated[o, r], distance[o, r])
             break
     if best is None:
         return None
-    _, field, size, o, r, where, distance = best
+    _, field, size, o, r, where, points, solid = best
     return Placement(
         char=field.char,
         center=center,
@@ -119,7 +123,8 @@ def _best_at(
         angle=float(angles[r]),
         size=size,
         index=where,
-        distance=distance.copy(),
+        distance=signed_distance(field, points, size, angle=0.0),
+        solid=solid.copy(),
     )
 
 
@@ -149,8 +154,8 @@ def pack(surface: Surface, fields: list[GlyphField], params: LayoutParams) -> li
             continue
         placements.append(placement)
         # 字の近くは輪郭までの正確な距離、遠くは字の内側の頂点からの曲面上の距離（近似）を使う
-        far = heat.compute_distance_multisource(placement.index[placement.distance < 0])
-        far[placement.index] = placement.distance
+        far = heat.compute_distance_multisource(placement.index[placement.solid < 0])
+        far[placement.index] = placement.solid
         nearest = np.minimum(nearest, far)
         unused = [field for field in unused if field.char != placement.char]
     return placements
