@@ -3,3 +3,5 @@ out/
 __pycache__/
 .pytest_cache/
 .DS_Store
+data/
+out_*/

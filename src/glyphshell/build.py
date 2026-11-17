@@ -1,12 +1,13 @@
-"""球に字を敷き詰め、接触面を決めて、プレビューを書き出す。
+"""曲面に字を敷き詰め、接触面を決めて、プレビューを書き出す。
 
-    uv run python -m glyphshell.build           # 配置からやり直す
-    uv run python -m glyphshell.build --reuse   # 保存した配置（out/layout.npz）を使う
+    uv run python -m glyphshell.build                 # 直径 150 mm の球に敷き詰める
+    uv run python -m glyphshell.build --reuse         # 保存した配置（out/layout.npz）を使う
+    uv run python -m glyphshell.build --mesh bunny.off --height 260 --out out_bunny
 """
 
+import argparse
 import dataclasses
 import string
-import sys
 import time
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from glyphshell.contacts import PadSize, find_contacts, piece_fields, stable_pie
 from glyphshell.layout import LayoutParams, load_layout, pack, save_layout
 from glyphshell.preview import render, write_png
 from glyphshell.sdf import glyph_field
-from glyphshell.surface import icosphere
+from glyphshell.surface import Surface, icosphere, load_surface
 
 # 字の出どころ。(書体のファイル, 書体の番号, 使う字)
 # 小さい記号（. , ' ` - など）は使わない。絵の記号は Avenir Next に無いので別の書体から取る。
@@ -31,6 +32,7 @@ SOURCES = [
 ]
 RADIUS = 75.0
 SUBDIVISIONS = 6  # 辺の長さは約 1.4 mm
+EDGE_LENGTH = 1.4  # メッシュのファイルを読むときの、辺の長さの上限
 
 # 磁石は直径 6 mm、厚さ 3 mm。穴の余裕は直径 +0.2 mm、最小の肉厚は 0.8 mm（REQUIREMENTS.md）
 MAGNET_DIAMETER, MAGNET_THICKNESS, HOLE_MARGIN, MIN_WALL = 6.0, 3.0, 0.2, 0.8
@@ -65,13 +67,45 @@ PARAMS = LayoutParams(
     min_extent=PAD.width,
     seed=1,
 )
-OUT = Path("out")
 
 
-def _layout(surface) -> list:
+@dataclasses.dataclass(frozen=True)
+class Job:
+    """1回の実行の対象。"""
+
+    surface: Surface
+    shape: str  # 外形の呼び名（「球」か、メッシュのファイル名）
+    out: Path
+    layout: Path  # 配置を保存するファイル
+    reuse: bool
+    rounds: int
+
+
+def parse_job(description: str) -> Job:
+    """コマンドラインの引数から、曲面と出力先を決める。build と export で同じ引数を使う。"""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--mesh", type=Path, help="敷き詰める形のメッシュ（閉じた1つの立体）。省くと球")
+    parser.add_argument("--height", type=float, default=2 * RADIUS, help="メッシュのいちばん長い辺の長さ（mm）")
+    parser.add_argument("--out", type=Path, default=Path("out"), help="出力先のフォルダ")
+    parser.add_argument("--layout", type=Path, help="配置のファイル。省くと出力先の layout.npz")
+    parser.add_argument("--reuse", action="store_true", help="保存した配置を使い、敷き詰めをやり直さない")
+    parser.add_argument("--rounds", type=int, default=REFILL_ROUNDS, help="字を入れ直す回数の上限")
+    args = parser.parse_args()
+    if args.height <= 0 or args.rounds < 1:
+        parser.error("--height は正の数、--rounds は 1 以上にする")
+    if args.mesh is None:
+        surface, shape = icosphere(RADIUS, SUBDIVISIONS), "球"
+    else:
+        surface, shape = load_surface(args.mesh, args.height, EDGE_LENGTH), args.mesh.name
+    args.out.mkdir(parents=True, exist_ok=True)
+    return Job(surface, shape, args.out, args.layout or args.out / "layout.npz", args.reuse, args.rounds)
+
+
+def _layout(job: Job) -> list:
     """字を敷き詰める。接触が足りない字は外し、空いた所に別の字を入れ直す。"""
-    if "--reuse" in sys.argv:
-        return load_layout(OUT / "layout.npz")
+    surface = job.surface
+    if job.reuse:
+        return load_layout(job.layout)
     started = time.time()
     fields = []
     for path, face_index, chars in SOURCES:
@@ -82,7 +116,7 @@ def _layout(surface) -> list:
                 fields.append(glyph_field(char, shape))
     placements = pack(surface, fields, PARAMS)
     best = []
-    for round_ in range(1, REFILL_ROUNDS + 1):
+    for round_ in range(1, job.rounds + 1):
         contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
         kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
         print(f"  {round_} 回目: {len(placements)} 字のうち、接触が足りる字 {len(kept)} 個（{time.time() - started:.0f} 秒）")
@@ -93,14 +127,14 @@ def _layout(surface) -> list:
         # 外した字とは別の字を試すよう、乱数の種を変える
         params = dataclasses.replace(PARAMS, seed=PARAMS.seed + round_)
         placements = pack(surface, fields, params, existing=[placements[i] for i in kept])
-    save_layout(OUT / "layout.npz", best)
+    save_layout(job.layout, best)
     return best
 
 
 def main() -> None:
-    OUT.mkdir(exist_ok=True)
-    surface = icosphere(RADIUS, SUBDIVISIONS)
-    placements = _layout(surface)
+    job = parse_job("曲面に字を敷き詰める")
+    surface = job.surface
+    placements = _layout(job)
     contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
     kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
     dropped = [p.char for i, p in enumerate(placements) if i not in kept]
@@ -112,7 +146,7 @@ def main() -> None:
     for contact in contacts:
         away = np.linalg.norm(surface.vertices - contact.point, axis=1)
         mark = np.minimum(mark, away - MARK_RADIUS)
-    write_png(OUT / "layout_preview.png", render(surface, pieces, mark, pixels_per_unit=3.0))
+    write_png(job.out / "layout_preview.png", render(surface, pieces, mark, pixels_per_unit=3.0))
 
     counts = np.zeros(len(placements), dtype=int)
     for contact in contacts:

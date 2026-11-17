@@ -61,6 +61,31 @@ def load_surface(path: Path, height: float, edge_length: float) -> Surface:
     )
 
 
+def _disk_around(faces: np.ndarray, center: int, vertex_count: int) -> np.ndarray:
+    """faces のうち、center を含み、辺でつながったひと続きの面だけを返す。
+
+    直線距離では近いが曲面の上ではつながっていない部分（薄い形の裏側など）を除く。
+    面どうしが1つの頂点だけで接する所があると局所座標を解けないので、その頂点のまわりの面も除く。
+    """
+    while True:
+        adjacency = trimesh.graph.face_adjacency(faces)
+        components = trimesh.graph.connected_components(adjacency, min_len=1, nodes=np.arange(len(faces)))
+        seeds = np.flatnonzero((faces == center).any(axis=1))
+        if len(seeds) == 0:
+            raise ValueError(f"中心の頂点 {center} のまわりに面がない")
+        faces = faces[np.sort(next(c for c in components if seeds[0] in c))]
+        # 縁の辺（1つの面にしか属さない辺）が3本以上集まる頂点は、面が1点だけで接している所
+        edges = np.sort(np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]), axis=1)
+        unique, counts = np.unique(edges, axis=0, return_counts=True)
+        rim = np.bincount(unique[counts == 1].ravel(), minlength=vertex_count)
+        pinched = rim > 2
+        if not pinched.any():
+            return faces
+        if pinched[center]:
+            raise ValueError(f"中心の頂点 {center} で面が1点だけで接している")
+        faces = faces[~pinched[faces].any(axis=1)]
+
+
 def local_map(surface: Surface, center: int, radius: float) -> tuple[np.ndarray, np.ndarray]:
     """中心の頂点のまわりの局所座標（対数写像）を返す。
 
@@ -73,14 +98,11 @@ def local_map(surface: Surface, center: int, radius: float) -> tuple[np.ndarray,
     faces = surface.faces[near[surface.faces].all(axis=1)]
     if not (reach[faces] < radius).any():
         raise ValueError(f"半径 {radius} の中に面がない（中心の頂点 {center}）")
-    # 直線距離では近いが曲面の上ではつながっていない部分（薄い形の裏側など）を除く
-    edges = np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
-    components = trimesh.graph.connected_components(edges, min_len=1)
-    solved = np.sort(next(c for c in components if center in c))
+    faces = _disk_around(faces, center, len(surface.vertices))
+    solved = np.unique(faces)
     renumber = np.full(len(surface.vertices), -1, dtype=np.int64)
     renumber[solved] = np.arange(len(solved))
     patch_faces = renumber[faces]
-    patch_faces = patch_faces[(patch_faces >= 0).all(axis=1)]
     solver = pp3d.MeshVectorHeatSolver(surface.vertices[solved], patch_faces)
     uv = np.asarray(solver.compute_log_map(int(renumber[center])))
     inner = reach[solved] < radius

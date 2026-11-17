@@ -1,8 +1,10 @@
 """保存した配置からピースの立体を作り、検証して、STL とビューワー用のデータに書き出す。
 
-    uv run python -m glyphshell.export [配置のファイル]   # 既定は out/layout.npz
+    uv run python -m glyphshell.export                          # out/layout.npz を使う
+    uv run python -m glyphshell.export --layout out/layout_39.npz
+    uv run python -m glyphshell.export --mesh bunny.off --height 260 --out out_bunny
 
-書き出すもの（out/ の下）:
+書き出すもの（出力先のフォルダの下）:
     stl/piece_番号_字.stl   印刷用。外側の面を上に向け、底を z=0 に置いた向き
     assembled.stl           組み上がった位置のままの全ピース
     verify_report.json      検証の結果（TESTLIST.md の 2〜6・9 番）
@@ -11,9 +13,7 @@
 
 import base64
 import json
-import sys
 import time
-from pathlib import Path
 
 import numpy as np
 import trimesh
@@ -25,15 +25,12 @@ from glyphshell.build import (
     MIN_CONTACT,
     MIN_CONTACTS_PER_PIECE,
     MIN_WALL,
-    OUT,
     PAD,
-    RADIUS,
-    SUBDIVISIONS,
+    parse_job,
 )
 from glyphshell.contacts import find_contacts, piece_fields, stable_pieces
 from glyphshell.layout import load_layout
 from glyphshell.solids import Pocket, clip_region, piece_solid, thicken
-from glyphshell.surface import icosphere
 from glyphshell.verify import (
     ContactFrame,
     assign_polarity,
@@ -88,10 +85,10 @@ def _packed(array: np.ndarray, dtype) -> str:
 
 
 def main() -> None:
-    layout_path = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT / "layout.npz"
+    job = parse_job("配置からピースの立体を作り、検証して書き出す")
     started = time.time()
-    surface = icosphere(RADIUS, SUBDIVISIONS)
-    placements = load_layout(layout_path)
+    surface = job.surface
+    placements = load_layout(job.layout)
     contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
     kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
     dropped = [p.char for i, p in enumerate(placements) if i not in kept]
@@ -199,7 +196,7 @@ def main() -> None:
     report["assembly_order"] = "".join(chars[i] for i in order)
     print(f"4番を確かめた（{time.time() - started:.0f} 秒）")
 
-    stl = OUT / "stl"
+    stl = job.out / "stl"
     stl.mkdir(parents=True, exist_ok=True)
     for old in stl.glob("*.stl"):
         old.unlink()
@@ -207,11 +204,12 @@ def main() -> None:
     for i, mesh in enumerate(meshes):
         outward = regions[i].normals.mean(axis=0)
         _print_pose(mesh, outward).export(stl / f"piece_{i:02d}_U+{ord(chars[i]):04X}.stl")
-    trimesh.util.concatenate(meshes).export(OUT / "assembled.stl")
-    (OUT / "verify_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    trimesh.util.concatenate(meshes).export(job.out / "assembled.stl")
+    (job.out / "verify_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     viewer = {
-        "diameter": 2 * RADIUS,
+        "shape": job.shape,
+        "extent": round(float((surface.vertices.max(axis=0) - surface.vertices.min(axis=0)).max()), 1),
         "thickness": THICKNESS,
         "magnet": {"diameter": MAGNET_DIAMETER, "thickness": MAGNET_THICKNESS},
         "report": report,
@@ -242,7 +240,7 @@ def main() -> None:
                 "size": placements[i].size,
             }
         )
-    (OUT / "viewer_data.json").write_text(json.dumps(viewer, ensure_ascii=False), encoding="utf-8")
+    (job.out / "viewer_data.json").write_text(json.dumps(viewer, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False))
     print(f"書き出した（{time.time() - started:.0f} 秒）")
 

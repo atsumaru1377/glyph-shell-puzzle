@@ -3,7 +3,7 @@ import pytest
 
 import trimesh
 
-from glyphshell.surface import icosphere, load_surface, local_map
+from glyphshell.surface import Surface, icosphere, load_surface, local_map
 
 RADIUS = 75.0
 
@@ -84,3 +84,34 @@ def test_閉じていないメッシュは例外(tmp_path):
     trimesh.Trimesh(vertices=sphere.vertices, faces=sphere.faces[:-10]).export(path)
     with pytest.raises(ValueError):
         load_surface(path, height=80.0, edge_length=3.0)
+
+
+def _grid(size, removed):
+    """size×size のマスの平らな板。removed のマス (列, 行) は面を作らない。"""
+    xs, ys = np.meshgrid(np.arange(size + 1.0), np.arange(size + 1.0))
+    vertices = np.stack([xs.ravel(), ys.ravel(), np.zeros(xs.size)], axis=1)
+    faces = []
+    for row in range(size):
+        for column in range(size):
+            if (column, row) in removed:
+                continue
+            a = row * (size + 1) + column
+            b, c, d = a + 1, a + size + 2, a + size + 1
+            faces += [[a, b, c], [a, c, d]]
+    normals = np.tile([0.0, 0.0, 1.0], (len(vertices), 1))
+    return Surface(vertices, np.array(faces), normals)
+
+
+def test_面が1点だけで接する所があっても局所座標を作れる():
+    # 頂点 (3, 3) の右上と左下のマスを抜くと、残りの面はその頂点だけで接する
+    plate = _grid(6, removed={(3, 3), (2, 2)})
+    center = 1 * 7 + 1  # 頂点 (1, 1)
+    index, uv = local_map(plate, center, radius=10.0)
+    assert center in index
+    assert np.isfinite(uv).all()
+    # 板が粗い（マス1つが辺1本）ので、辺でつながった隣の頂点だけで距離を確かめる
+    distance = np.linalg.norm(plate.vertices[index] - plate.vertices[center], axis=1)
+    beside = np.isclose(distance, 1.0)
+    assert np.linalg.norm(uv[beside], axis=1) == pytest.approx(1.0, abs=0.1)
+    # 1点だけで接していた頂点は、解ける範囲から外れる
+    assert 3 * 7 + 3 not in index
