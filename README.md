@@ -38,6 +38,10 @@ uv run python -m glyphshell.export --mesh data/bunny/bunny.off --height 200 --ou
 （<https://raw.githubusercontent.com/libigl/libigl-tutorial-data/master/bunny.off>）を
 `data/bunny/` に置いて使った。`data/` は git に入れていない。
 
+高さ 200 mm のうさぎでは、接触が3か所に届く字が残らず、STL までは通っていない
+（原因は `TESTLIST.md` の「7番の結果」）。字の高さ（46〜60 mm）より細い所がある形には、
+今の作りでは敷き詰められない。
+
 書体を選ぶための見本は `uv run python -m glyphshell.specimen` で `out/font_specimen.svg` に出る。
 
 ## 印刷と組み立て
