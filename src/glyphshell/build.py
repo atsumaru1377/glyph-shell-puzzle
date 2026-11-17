@@ -139,6 +139,11 @@ def main() -> None:
     kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
     dropped = [p.char for i, p in enumerate(placements) if i not in kept]
     placements = [placements[i] for i in kept]
+    if not placements:
+        raise SystemExit(
+            f"接触が {MIN_CONTACTS_PER_PIECE} か所に届く字が1つも残らなかった（{job.shape}）。"
+            "字の大きさに比べて形が細かいと、字がまばらにしか置けない"
+        )
     contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
     pieces = piece_fields(surface, placements, contacts, PAD)
 
