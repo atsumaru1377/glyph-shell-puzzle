@@ -1,0 +1,25 @@
+[project]
+name = "glyphshell"
+version = "0.1.0"
+description = "殻を字形のピースに分けた立体パズルを作る道具"
+authors = [
+    { name = "Atsushi Maruyama", email = "62948930+atsumaru1377@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "fonttools>=4.68.0",
+    "manifold3d>=3.5.5",
+    "numpy>=2.5.5",
+    "potpourri3d>=1.4.0",
+    "shapely>=2.2.0",
+    "trimesh>=5.2.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
