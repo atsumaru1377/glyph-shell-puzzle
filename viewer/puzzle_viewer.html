@@ -103,7 +103,7 @@
 <div class="page">
   <header>
     <h1>字形の殻パズル</h1>
-    <p class="lede">文字と記号の形をしたピースを、磁石でつないで球にする立体パズル</p>
+    <p class="lede">文字と記号の形をしたピースを、磁石でつないで殻にする立体パズル</p>
   </header>
 
   <ul class="facts" id="facts" aria-label="全体の数値"></ul>
@@ -190,7 +190,7 @@
     var facts = [
       [count, "ピース"],
       [report.magnets, "個の磁石"],
-      [data.diameter + " mm", "球の直径"],
+      [data.extent + " mm", data.shape === "球" ? "球の直径" : "外形のいちばん長い辺"],
       [data.thickness + " mm", "殻の厚さ"],
       ["直径 " + data.magnet.diameter + " × 厚さ " + data.magnet.thickness + " mm", "磁石の寸法"]
     ];
@@ -225,7 +225,7 @@
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     var scene = new THREE.Scene();
     var camera = new THREE.PerspectiveCamera(32, 1, 10, 4000);
-    var distance = data.diameter * 2.6;
+    var distance = data.extent * 2.6;
     camera.position.set(0, 0, distance);
     scene.add(new THREE.HemisphereLight(0xffffff, 0x556070, 0.95));
     var sun = new THREE.DirectionalLight(0xffffff, 0.65);
@@ -349,7 +349,7 @@
     var pointers = new Map(), moved = 0, pinch = 0;
     var raycaster = new THREE.Raycaster(), axisX = new THREE.Vector3(1, 0, 0), axisY = new THREE.Vector3(0, 1, 0), turn = new THREE.Quaternion();
     function zoom(factor) {
-      distance = Math.min(data.diameter * 6, Math.max(data.diameter * 1.1, distance * factor));
+      distance = Math.min(data.extent * 6, Math.max(data.extent * 1.1, distance * factor));
       camera.position.set(0, 0, distance);
       dirty = true;
     }
