@@ -8,8 +8,12 @@ import numpy as np
 
 from glyphshell.surface import Surface
 
-GLYPH = np.array([40, 40, 46], dtype=float)
-BRIDGE = np.array([240, 140, 40], dtype=float)
+# ピースの色。隣どうしを見分けられるよう、番号の順に使い回す
+PALETTE = np.array(
+    [[38, 70, 83], [42, 157, 143], [92, 107, 192], [231, 111, 81], [69, 123, 157], [141, 110, 99], [84, 110, 122]],
+    dtype=float,
+)
+MARK = np.array([255, 214, 10], dtype=float)
 EMPTY = np.array([225, 228, 232], dtype=float)
 BACKGROUND = 255
 # 1つの三角形の中に取る点の細かさ。辺を SUBDIVISION 等分した格子点を描く。
@@ -43,19 +47,16 @@ def write_png(path: Path, image: np.ndarray) -> None:
     )
 
 
-def region_fields(fields: np.ndarray, reach: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """頂点ごとに、(いちばん近い字の番号, 字の内側なら負になる値, 橋の中なら負になる値) を返す。
+def render(
+    surface: Surface, pieces: np.ndarray, mark: np.ndarray, pixels_per_unit: float
+) -> np.ndarray:
+    """6方向の正射影を 3×2 に並べた画像を返す。
 
-    fields は [字, 頂点] の符号付き距離。橋は、2つの字の両方から reach / 2 より近い所。
+    pieces は [ピース, 頂点] の値で、負の所をそのピースの色で塗る。mark は頂点ごとの値で、
+    負の所をその上から印の色で塗る。
     """
-    order = np.argsort(fields, axis=0)[:2]
-    first = np.take_along_axis(fields, order[:1], axis=0)[0]
-    second = np.take_along_axis(fields, order[1:2], axis=0)[0] if len(fields) > 1 else np.full_like(first, np.inf)
-    return order[0], first, second - reach / 2
-
-
-def render(surface: Surface, glyph: np.ndarray, bridge: np.ndarray, pixels_per_unit: float) -> np.ndarray:
-    """6方向の正射影を 3×2 に並べた画像を返す。glyph と bridge は頂点ごとの値（負が内側）。"""
+    glyph = pieces.min(axis=0)
+    owner = pieces.argmin(axis=0)
     extent = float(np.abs(surface.vertices).max()) * 1.05
     side = int(np.ceil(2 * extent * pixels_per_unit))
     weights = np.array(
@@ -69,11 +70,12 @@ def render(surface: Surface, glyph: np.ndarray, bridge: np.ndarray, pixels_per_u
     tri = surface.vertices[surface.faces]
     points = np.einsum("sk,fkd->fsd", weights, tri).reshape(-1, 3)
     normals = np.einsum("sk,fkd->fsd", weights, surface.normals[surface.faces]).reshape(-1, 3)
-    glyph_s = np.einsum("sk,fk->fs", weights, glyph[surface.faces]).ravel()
-    bridge_s = np.einsum("sk,fk->fs", weights, np.minimum(bridge[surface.faces], 1e6)).ravel()
-    color = np.where(
-        (glyph_s < 0)[:, None], GLYPH, np.where((bridge_s < 0)[:, None], BRIDGE, EMPTY)
-    )
+    glyph_s = np.einsum("sk,fk->fs", weights, np.minimum(glyph[surface.faces], 1e6)).ravel()
+    mark_s = np.einsum("sk,fk->fs", weights, np.minimum(mark[surface.faces], 1e6)).ravel()
+    # 三角形の中の点は、いちばん近い頂点のピースの色にする
+    nearest_corner = surface.faces[:, weights.argmax(axis=1)]
+    piece_color = PALETTE[owner[nearest_corner].ravel() % len(PALETTE)]
+    color = np.where((mark_s < 0)[:, None], MARK, np.where((glyph_s < 0)[:, None], piece_color, EMPTY))
     image = np.full((2 * side, 3 * side, 3), BACKGROUND, dtype=np.uint8)
     for k, (_, toward, up) in enumerate(VIEWS):
         toward, up = np.array(toward, dtype=float), np.array(up, dtype=float)
