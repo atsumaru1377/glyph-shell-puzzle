@@ -5,6 +5,7 @@
 
 - 何を作るか、何を決めたか: `REQUIREMENTS.md`
 - 何を確かめるか、いまの合否: `TESTLIST.md`
+- 作り直す手順と、作る途中で分かったこと: `METHOD.md`
 - 使える技術の調査: `survey/map.md`
 
 ## 使い方
@@ -46,7 +47,8 @@ uv run python -m glyphshell.export --mesh data/bunny/bunny.off --height 300 --ou
 `data/bunny/` に置いて使った。`data/` は git に入れていない。
 
 球の敷き詰めは、字を足すのをやめる条件を入れる前に約45分かかった。条件を入れた後の時間は
-測っていない（球はやり直していない。保存済みの `out/layout.npz` を使っている）。
+測っていない。検証を通った球の配置は `layouts/sphere_26.npz` に保存してあり、
+`uv run python -m glyphshell.export --layout layouts/sphere_26.npz` で同じピースを作り直せる。
 
 うさぎは高さ 300 mm で 46 ピースになり、検証を全項目通った（`TESTLIST.md` の「うさぎでの結果」）。
 高さ 200 mm では内側の面が狭く、字が入りきらない。
