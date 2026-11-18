@@ -30,6 +30,7 @@ class Region:
     vertices: np.ndarray  # [n, 3]
     normals: np.ndarray  # [n, 3]
     faces: np.ndarray  # [m, 3]
+    reach: np.ndarray  # [n] 面から外へ押し出す長さ。外へ押し出さないときは 0
     dropped_area: float  # 捨てた小さい島の面積の合計
 
 
@@ -48,11 +49,13 @@ def _triangle_areas(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     return np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1) / 2
 
 
-def clip_region(surface: Surface, field: np.ndarray) -> Region:
+def clip_region(surface: Surface, field: np.ndarray, reach: np.ndarray | None = None) -> Region:
     """曲面のうち field が負の所を切り出す。縁は、辺の上で値を直線で補間して 0 になる点を通る。
 
     離れた塊がいくつもあるときは、面積がいちばん大きい塊だけを残す。
+    reach は、頂点ごとの外へ押し出す長さ（内側の面から切り出すとき）。省くと 0。
     """
+    reach = np.zeros(len(surface.vertices)) if reach is None else reach
     field = np.where(np.isfinite(field), field, 1e6)
     inside = field < 0
     if not inside.any():
@@ -70,6 +73,7 @@ def clip_region(surface: Surface, field: np.ndarray) -> Region:
     cut_vertices = surface.vertices[low] * (1 - t) + surface.vertices[high] * t
     cut_normals = surface.normals[low] * (1 - t) + surface.normals[high] * t
     cut_normals /= np.linalg.norm(cut_normals, axis=1, keepdims=True)
+    cut_reach = reach[low] * (1 - t[:, 0]) + reach[high] * t[:, 0]
 
     def cut(u: np.ndarray, v: np.ndarray) -> np.ndarray:
         return count + np.searchsorted(keys, np.minimum(u, v) * count + np.maximum(u, v))
@@ -103,24 +107,38 @@ def clip_region(surface: Surface, field: np.ndarray) -> Region:
         vertices=all_vertices[used],
         normals=all_normals[used],
         faces=renumber[kept_faces],
+        reach=np.concatenate([reach, cut_reach])[used],
         dropped_area=float(areas.sum() - areas[largest]),
     )
 
 
-def thicken(region: Region, thickness: float) -> manifold3d.Manifold:
-    """切り出した面を、法線の内向きに thickness だけ下げた面と壁でつなぎ、閉じた立体にする。"""
+def thicken(region: Region, depth: float) -> manifold3d.Manifold:
+    """切り出した面を、法線の外向きに region.reach、内向きに depth だけ動かした2枚の面と壁で閉じた立体にする。"""
     n = len(region.vertices)
-    inner = region.vertices - thickness * region.normals
+    outer = region.vertices + region.reach[:, None] * region.normals
+    inner = region.vertices - depth * region.normals
     faces = region.faces
     # 縁の辺は、1つの三角形にしか属さない辺。向きつきの辺 (u, v) の逆向き (v, u) が無いもの
     directed = np.vstack([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
     keys = directed[:, 0] * n + directed[:, 1]
     boundary = directed[~np.isin(keys, directed[:, 1] * n + directed[:, 0])]
     u, v = boundary[:, 0], boundary[:, 1]
-    walls = np.vstack([np.stack([u, u + n, v], axis=1), np.stack([v, u + n, v + n], axis=1)])
+    # 壁の四角形は平らとは限らないので、対角線の引き方で形が変わる。隣のピースが同じ辺に作る壁と
+    # 同じ三角形になるよう、対角線は「座標の小さいほうの頂点の内側の点」から引く（頂点の番号は
+    # ピースごとに違うので、座標で決める）
+    position = region.vertices
+    differ = position[u] != position[v]
+    axis = differ.argmax(axis=1)
+    u_first = position[u, axis] < position[v, axis]
+    walls = np.vstack(
+        [
+            np.stack([u, u + n, np.where(u_first, v, v + n)], axis=1),
+            np.where(u_first[:, None], np.stack([v, u + n, v + n], axis=1), np.stack([u, v + n, v], axis=1)),
+        ]
+    )
     triangles = np.vstack([faces, faces[:, ::-1] + n, walls])
     mesh = manifold3d.Mesh(
-        vert_properties=np.ascontiguousarray(np.vstack([region.vertices, inner]), dtype=np.float32),
+        vert_properties=np.ascontiguousarray(np.vstack([outer, inner]), dtype=np.float32),
         tri_verts=np.ascontiguousarray(triangles, dtype=np.uint32),
     )
     solid = manifold3d.Manifold(mesh)
@@ -130,13 +148,13 @@ def thicken(region: Region, thickness: float) -> manifold3d.Manifold:
 
 
 def piece_solid(
-    region: Region, thickness: float, pockets: list[Pocket], hole_diameter: float, hole_depth: float
+    solid: manifold3d.Manifold, thickness: float, pockets: list[Pocket], hole_diameter: float, hole_depth: float
 ) -> manifold3d.Manifold:
-    """厚みを付けた立体に、磁石の穴を開ける。穴の中心は厚みの真ん中に置く。
+    """厚みを付けた立体に、磁石の穴を開ける。
 
-    N 極を外へ向ける穴には、穴の真下（殻の内側の面）に印の突起を付ける。
+    穴の中心は、Pocket.point から法線の内向きに thickness の半分の所に置く。殻の内側の面は
+    thickness の所にあるものとして、N 極を外へ向ける穴の真下（内側の面）に印の突起を付ける。
     """
-    solid = thicken(region, thickness)
     for pocket in pockets:
         axis = pocket.into / np.linalg.norm(pocket.into)
         side = np.cross(pocket.normal, axis)

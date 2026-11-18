@@ -191,7 +191,7 @@
       [count, "ピース"],
       [report.magnets, "個の磁石"],
       [data.extent + " mm", data.shape === "球" ? "球の直径" : "外形のいちばん長い辺"],
-      [data.thickness + " mm", "殻の厚さ"],
+      [data.thickness + " mm", data.shape === "球" ? "殻の厚さ" : "殻のいちばん薄い所"],
       ["直径 " + data.magnet.diameter + " × 厚さ " + data.magnet.thickness + " mm", "磁石の寸法"]
     ];
     facts.forEach(function (fact) {
@@ -208,9 +208,9 @@
       [report.test6_thin_walls.length === 0, "磁石の穴のまわりの肉厚 0.8 mm 以上"],
       [report.test9_same_poles.length === 0, "どの接触も、両側の磁石の極が逆を向く"],
       [report.test5_wrong_fits_attracting === 0, "別の場所に付く置き方 " + report.test5_wrong_fits_checked + " 通りは、どれも磁石が反発する"],
-      [true, report.test4_insert_before.length === 0
-        ? "どのピースも、ほかが全部ある状態で外から入る"
-        : "下の順に入れれば、どのピースも外から入る（順が要る組 " + report.test4_insert_before.length + " つ）"]
+      [report.test4_stuck.length === 0, report.test4_stuck.length === 0
+        ? "下の順に入れれば、どのピースも外から入る"
+        : "外から入れられないピース " + report.test4_stuck.length + " 個（" + report.test4_stuck.join(" ") + "）"]
     ];
     checks.forEach(function (check) {
       var li = el("li");
@@ -249,6 +249,14 @@
       mesh.userData.index = i;
       group.add(mesh);
       return mesh;
+    });
+
+    // 字のピースにならない追加のパーツ（耳など）。動かさず、選べない
+    (data.extras || []).forEach(function (extra) {
+      var geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(bytes(extra.positions)), 3));
+      geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(bytes(extra.indices)), 1));
+      group.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0x9aa3a8, roughness: 0.85, metalness: 0.0, flatShading: true })));
     });
 
     // 磁石は、それぞれのピースの子にする。ばらすとピースと一緒に動く

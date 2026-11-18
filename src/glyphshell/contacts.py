@@ -189,6 +189,18 @@ def stable_pieces(piece_count: int, contacts: list[Contact], minimum: int) -> li
         kept -= short
 
 
+def connected_pieces(piece_count: int, contacts: list[Contact], minimum: int) -> list[int]:
+    """接触が minimum か所以上あるピースの番号を返す。stable_pieces と違い、外した先の連鎖はさせない。
+
+    字を入れ直すときの足場に使う。連鎖させると、1つ足りないだけの字から全部が外れることがある。
+    """
+    counts = np.zeros(piece_count, dtype=int)
+    for contact in contacts:
+        counts[contact.a] += 1
+        counts[contact.b] += 1
+    return np.flatnonzero(counts >= minimum).tolist()
+
+
 def piece_fields(
     surface: Surface, placements: list[Placement], contacts: list[Contact], pad: PadSize
 ) -> np.ndarray:

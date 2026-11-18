@@ -67,7 +67,7 @@ def test_磁石の穴を開けると円柱ぶんの体積が減る(sphere):
     inward = np.array([-np.cos(15.0 / RADIUS), 0.0, np.sin(15.0 / RADIUS)])
     pocket = Pocket(point=edge * RADIUS, normal=edge, into=inward)
     plain = thicken(region, THICKNESS)
-    drilled = piece_solid(region, THICKNESS, [pocket], hole_diameter=6.2, hole_depth=3.0)
+    drilled = piece_solid(plain, THICKNESS, [pocket], hole_diameter=6.2, hole_depth=3.0)
     removed = plain.volume() - drilled.volume()
     assert removed == pytest.approx(np.pi * 3.1**2 * 3.0, rel=0.1)
     assert drilled.status().name == "NoError"
@@ -77,10 +77,34 @@ def test_N極を外へ向ける穴には内側の面に印の突起が付く(sph
     region = clip_region(sphere, _cap_field(sphere, (0, 0, 1), 15.0))
     edge = np.array([np.sin(15.0 / RADIUS), 0.0, np.cos(15.0 / RADIUS)])
     inward = np.array([-np.cos(15.0 / RADIUS), 0.0, np.sin(15.0 / RADIUS)])
-    plain = piece_solid(region, THICKNESS, [Pocket(edge * RADIUS, edge, inward)], 6.2, 3.0)
-    marked = piece_solid(region, THICKNESS, [Pocket(edge * RADIUS, edge, inward, north_out=True)], 6.2, 3.0)
+    base = thicken(region, THICKNESS)
+    plain = piece_solid(base, THICKNESS, [Pocket(edge * RADIUS, edge, inward)], 6.2, 3.0)
+    marked = piece_solid(base, THICKNESS, [Pocket(edge * RADIUS, edge, inward, north_out=True)], 6.2, 3.0)
     added = marked.volume() - plain.volume()
     assert added == pytest.approx(np.pi * 1.2**2 * 0.8, rel=0.15)
     # 突起は殻の内側の面（半径 RADIUS − THICKNESS）より中心側へ出る
     inner_most = np.linalg.norm(np.asarray(marked.to_mesh().vert_properties)[:, :3], axis=1).min()
     assert inner_most == pytest.approx(RADIUS - THICKNESS - 0.8, abs=0.1)
+
+
+def test_外へ押し出す長さを渡すと面の外側にも厚みが付く(sphere):
+    reach = np.full(len(sphere.vertices), 5.0)
+    region = clip_region(sphere, _cap_field(sphere, (0, 0, 1), 15.0), reach)
+    solid = thicken(region, THICKNESS)
+    assert solid.status().name == "NoError"
+    cap = 2 * np.pi * (1 - np.cos(15.0 / RADIUS)) / 3
+    exact = cap * ((RADIUS + 5.0) ** 3 - (RADIUS - THICKNESS) ** 3)
+    assert solid.volume() == pytest.approx(exact, rel=0.02)
+
+
+def test_隣り合う領域を押し出した立体は壁がぴったり合う(sphere):
+    # 押し出す長さが頂点ごとに大きく違っても、境の壁は両側で同じ三角形になる
+    reach = 5.0 + 10.0 * (np.sin(sphere.vertices[:, 0] * 2.0) > 0)
+    field = _cap_field(sphere, (0, 0, 1), 15.0)
+    outside = np.maximum(-field, _cap_field(sphere, (0, 0, 1), 30.0))
+    disc = thicken(clip_region(sphere, field, reach), THICKNESS)
+    ring = thicken(clip_region(sphere, outside, reach), THICKNESS)
+    assert (disc ^ ring).volume() == pytest.approx(0.0, abs=1e-6)
+    both = thicken(clip_region(sphere, _cap_field(sphere, (0, 0, 1), 30.0), reach), THICKNESS)
+    # 境で切らずに作った立体と体積が合う（境の上の頂点は外側の面がわずかに折れるので、0.1% まで許す）
+    assert disc.volume() + ring.volume() == pytest.approx(both.volume(), rel=1e-3)

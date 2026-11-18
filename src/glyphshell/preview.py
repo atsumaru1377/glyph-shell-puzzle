@@ -5,6 +5,7 @@ import zlib
 from pathlib import Path
 
 import numpy as np
+import trimesh
 
 from glyphshell.surface import Surface
 
@@ -95,3 +96,23 @@ def render(
         row, column = divmod(k, 3)
         image[row * side : (row + 1) * side, column * side : (column + 1) * side] = view
     return image
+
+
+def render_solids(pieces: list[trimesh.Trimesh], extras: list[trimesh.Trimesh], pixels_per_unit: float) -> np.ndarray:
+    """ピースの立体を、ピースごとの色で 6 方向から描く。extras（字でないパーツ）は色を付けずに描く。"""
+    # 立体の三角形は大きさがまちまちなので、点を取る前に、曲面と同じ細かさ（1 画素より細かい間隔）まで分ける
+    edge = SUBDIVISION / (2 * pixels_per_unit)
+    vertices, faces, normals, owner = [], [], [], []
+    offset = 0
+    for k, mesh in enumerate([*pieces, *extras]):
+        fine_vertices, fine_faces = trimesh.remesh.subdivide_to_size(mesh.vertices, mesh.faces, max_edge=edge)
+        fine = trimesh.Trimesh(vertices=fine_vertices, faces=fine_faces, process=False)
+        vertices.append(fine_vertices)
+        faces.append(fine_faces + offset)
+        normals.append(fine.vertex_normals)
+        owner.append(np.full(len(fine_vertices), k if k < len(pieces) else -1))
+        offset += len(fine_vertices)
+    owner = np.concatenate(owner)
+    values = np.where(owner[None, :] == np.arange(len(pieces))[:, None], -1.0, 1.0)
+    surface = Surface(np.vstack(vertices), np.vstack(faces), np.vstack(normals))
+    return render(surface, values, np.full(len(owner), np.inf), pixels_per_unit)

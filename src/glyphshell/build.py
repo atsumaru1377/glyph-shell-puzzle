@@ -2,7 +2,10 @@
 
     uv run python -m glyphshell.build                 # 直径 150 mm の球に敷き詰める
     uv run python -m glyphshell.build --reuse         # 保存した配置（out/layout.npz）を使う
-    uv run python -m glyphshell.build --mesh bunny.off --height 260 --out out_bunny
+    uv run python -m glyphshell.build --mesh bunny.off --height 300 --out out_bunny
+
+球は、球の表面に字を敷き詰め、内向きに厚みを付ける。メッシュを渡したときは、その形の内側に
+作ったなめらかな面（glyphshell.skin）に敷き詰め、外へ向かって元の形の表面まで厚みを付ける。
 """
 
 import argparse
@@ -14,11 +17,12 @@ from pathlib import Path
 import numpy as np
 
 from glyphshell.glyphs import glyph_shape, is_single_piece, load_font
-from glyphshell.contacts import PadSize, find_contacts, piece_fields, stable_pieces
+from glyphshell.contacts import PadSize, connected_pieces, find_contacts, piece_fields, stable_pieces
 from glyphshell.layout import LayoutParams, load_layout, pack, save_layout
 from glyphshell.preview import render, write_png
 from glyphshell.sdf import glyph_field
-from glyphshell.surface import Surface, icosphere, load_surface
+from glyphshell.skin import Skin, inner_skin
+from glyphshell.surface import Surface, icosphere, load_mesh
 
 # 字の出どころ。(書体のファイル, 書体の番号, 使う字)
 # 小さい記号（. , ' ` - など）は使わない。絵の記号は Avenir Next に無いので別の書体から取る。
@@ -36,6 +40,11 @@ EDGE_LENGTH = 1.4  # メッシュのファイルを読むときの、辺の長�
 
 # 磁石は直径 6 mm、厚さ 3 mm。穴の余裕は直径 +0.2 mm、最小の肉厚は 0.8 mm（REQUIREMENTS.md）
 MAGNET_DIAMETER, MAGNET_THICKNESS, HOLE_MARGIN, MIN_WALL = 6.0, 3.0, 0.2, 0.8
+
+# 殻の厚さ。磁石の穴（直径 6.2 mm）の上下に壁 0.8 mm ずつで 7.8 mm 要る。穴はまっすぐで
+# 曲面は曲がっているので、その差と面の粗さの余裕を足して 8.5 mm にする。
+# メッシュを渡したときは、これがピースのいちばん薄い所の厚さになる
+THICKNESS = 8.5
 
 # ピースの縁は、メッシュの辺の上の点を直線でつないで作るので、角が丸まって少し内側に入る。
 # その分の余裕。辺の長さ 1.4 mm の約3割
@@ -65,6 +74,11 @@ PARAMS = LayoutParams(
     candidates=16,
     min_neck=MAGNET_THICKNESS + MIN_WALL,
     min_extent=PAD.width,
+    # 字を足すのをやめる空きの半径（仮の値。担当者の承認が要る）。台の幅と同じにした。
+    # 実測では、空きの半径が 13.7 mm より狭い所に字が入ったことはなく、うさぎ（高さ 200 mm）では
+    # 14.1 mm から 2.2 mm まで 250 回続けて入らなかった。0 にすると全部の空きを試すが、
+    # 1回の敷き詰めが 1 時間を超える
+    min_free_radius=PAD.width,
     seed=1,
 )
 
@@ -73,7 +87,8 @@ PARAMS = LayoutParams(
 class Job:
     """1回の実行の対象。"""
 
-    surface: Surface
+    surface: Surface  # 字を敷き詰める面
+    skin: Skin | None  # メッシュを渡したときの、内側の面と元の形。球のときは None
     shape: str  # 外形の呼び名（「球」か、メッシュのファイル名）
     out: Path
     layout: Path  # 配置を保存するファイル
@@ -94,15 +109,20 @@ def parse_job(description: str) -> Job:
     if args.height <= 0 or args.rounds < 1:
         parser.error("--height は正の数、--rounds は 1 以上にする")
     if args.mesh is None:
-        surface, shape = icosphere(RADIUS, SUBDIVISIONS), "球"
+        surface, skin, shape = icosphere(RADIUS, SUBDIVISIONS), None, "球"
     else:
-        surface, shape = load_surface(args.mesh, args.height, EDGE_LENGTH), args.mesh.name
+        skin = inner_skin(*load_mesh(args.mesh, args.height), THICKNESS, EDGE_LENGTH)
+        surface, shape = skin.surface, args.mesh.name
     args.out.mkdir(parents=True, exist_ok=True)
-    return Job(surface, shape, args.out, args.layout or args.out / "layout.npz", args.reuse, args.rounds)
+    return Job(surface, skin, shape, args.out, args.layout or args.out / "layout.npz", args.reuse, args.rounds)
 
 
 def _layout(job: Job) -> list:
-    """字を敷き詰める。接触が足りない字は外し、空いた所に別の字を入れ直す。"""
+    """字を敷き詰める。接触が足りない字は外し、空いた所に別の字を入れ直す。
+
+    入れ直すときは、接触が足りている字を足場として残す。採用するのは、外す字を連鎖させても
+    残る字（どの字も接触が足りている組）がいちばん多かった回の配置。
+    """
     surface = job.surface
     if job.reuse:
         return load_layout(job.layout)
@@ -119,14 +139,19 @@ def _layout(job: Job) -> list:
     for round_ in range(1, job.rounds + 1):
         contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
         kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
-        print(f"  {round_} 回目: {len(placements)} 字のうち、接触が足りる字 {len(kept)} 個（{time.time() - started:.0f} 秒）")
+        scaffold = connected_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
+        print(
+            f"  {round_} 回目: {len(placements)} 字のうち、接触が足りる字 {len(scaffold)} 個、"
+            f"連鎖させても残る字 {len(kept)} 個（{time.time() - started:.0f} 秒）",
+            flush=True,
+        )
         if len(kept) > len(best):
             best = [placements[i] for i in kept]
         if len(kept) == len(placements):
             break
         # 外した字とは別の字を試すよう、乱数の種を変える
         params = dataclasses.replace(PARAMS, seed=PARAMS.seed + round_)
-        placements = pack(surface, fields, params, existing=[placements[i] for i in kept])
+        placements = pack(surface, fields, params, existing=[placements[i] for i in scaffold])
     save_layout(job.layout, best)
     return best
 

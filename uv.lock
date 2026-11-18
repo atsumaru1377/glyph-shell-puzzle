@@ -65,6 +65,7 @@ dependencies = [
     { name = "manifold3d" },
     { name = "numpy" },
     { name = "potpourri3d" },
+    { name = "scipy" },
     { name = "shapely" },
     { name = "trimesh" },
 ]
@@ -80,6 +81,7 @@ requires-dist = [
     { name = "manifold3d", specifier = ">=3.5.5" },
     { name = "numpy", specifier = ">=2.5.5" },
     { name = "potpourri3d", specifier = ">=1.4.0" },
+    { name = "scipy", specifier = ">=1.18.1" },
     { name = "shapely", specifier = ">=2.2.0" },
     { name = "trimesh", specifier = ">=5.2.1" },
 ]

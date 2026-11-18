@@ -7,6 +7,7 @@ from glyphshell.contacts import (
     PadSize,
     dense_fields,
     find_contacts,
+    connected_pieces,
     piece_fields,
     stable_pieces,
 )
@@ -24,6 +25,7 @@ PARAMS = LayoutParams(
     candidates=6,
     min_neck=3.8,
     min_extent=7.8,
+    min_free_radius=0.0,
     seed=3,
 )
 
@@ -167,3 +169,16 @@ def test_接触面の中心は曲面の上にあり法線はその場所のも�
     for contact in contacts:
         assert np.linalg.norm(contact.point) == pytest.approx(40.0, abs=0.05)
         assert contact.normal @ contact.point / np.linalg.norm(contact.point) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_入れ直しの足場には接触が足りている字を連鎖させずに残す():
+    def contact(a, b):
+        return Contact(a, b, np.zeros(3), np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0]), 5.0)
+
+    # 0〜3 は互いに全部つながる（3か所ずつ）。4 は 0 と 1 にだけつながる（2か所）
+    contacts = [contact(a, b) for a in range(4) for b in range(a + 1, 4)] + [contact(0, 4), contact(1, 4)]
+    assert connected_pieces(5, contacts, minimum=3) == [0, 1, 2, 3]
+    # 3 が 0 としかつながらないと、連鎖させれば全部外れるが、足場には 0 が残る
+    chain = [contact(0, 1), contact(0, 2), contact(0, 3), contact(1, 2)]
+    assert stable_pieces(4, chain, minimum=3) == []
+    assert connected_pieces(4, chain, minimum=3) == [0]

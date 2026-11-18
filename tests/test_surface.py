@@ -3,7 +3,7 @@ import pytest
 
 import trimesh
 
-from glyphshell.surface import Surface, icosphere, load_surface, local_map
+from glyphshell.surface import Surface, icosphere, load_mesh, local_map
 
 RADIUS = 75.0
 
@@ -58,24 +58,12 @@ def ellipsoid(tmp_path_factory):
     return path
 
 
-def test_ファイルのメッシュを決めた大きさと細かさで読む(ellipsoid):
-    surface = load_surface(ellipsoid, height=80.0, edge_length=3.0)
-    extents = surface.vertices.max(axis=0) - surface.vertices.min(axis=0)
+def test_ファイルのメッシュを決めた大きさで読む(ellipsoid):
+    vertices, faces = load_mesh(ellipsoid, height=80.0)
+    extents = vertices.max(axis=0) - vertices.min(axis=0)
     assert extents.max() == pytest.approx(80.0, rel=0.01)
-    edges = surface.vertices[surface.faces] - surface.vertices[np.roll(surface.faces, 1, axis=1)]
-    assert np.linalg.norm(edges, axis=2).max() <= 3.0
-    # 法線は外向き（楕円体は凸なので、中心から見た向きと同じ側）
-    assert ((surface.normals * surface.vertices).sum(axis=1) > 0).all()
-
-
-def test_読んだメッシュでも局所座標を作れる(ellipsoid):
-    surface = load_surface(ellipsoid, height=80.0, edge_length=3.0)
-    index, uv = local_map(surface, center=0, radius=15.0)
-    distance = np.linalg.norm(surface.vertices[index] - surface.vertices[0], axis=1)
-    # 曲面に沿った距離は直線距離以上で、この大きさでは 1 mm も違わない
-    difference = np.linalg.norm(uv, axis=1) - distance
-    assert difference.min() > -0.5  # 辺の長さ 3 mm の粗いメッシュなので、誤差は辺の1〜2割
-    assert difference.max() < 1.0
+    # 中心は原点に置く
+    assert (vertices.max(axis=0) + vertices.min(axis=0)) / 2 == pytest.approx(np.zeros(3), abs=1e-6)
 
 
 def test_閉じていないメッシュは例外(tmp_path):
@@ -83,7 +71,7 @@ def test_閉じていないメッシュは例外(tmp_path):
     sphere = trimesh.creation.icosphere(subdivisions=2)
     trimesh.Trimesh(vertices=sphere.vertices, faces=sphere.faces[:-10]).export(path)
     with pytest.raises(ValueError):
-        load_surface(path, height=80.0, edge_length=3.0)
+        load_mesh(path, height=80.0)
 
 
 def _grid(size, removed):

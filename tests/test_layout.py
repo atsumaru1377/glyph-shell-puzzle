@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 import pytest
 from shapely.geometry import Point, box
@@ -15,6 +17,7 @@ PARAMS = LayoutParams(
     candidates=6,
     min_neck=3.8,
     min_extent=7.8,
+    min_free_radius=0.0,
     seed=1,
 )
 
@@ -85,7 +88,7 @@ def test_字の穴の中には別の字を置かない(sphere):
     ring = glyph_field("o", Point(0, 0).buffer(1.0).difference(Point(0, 0).buffer(0.75)))
     dot = glyph_field("c", Point(0, 0).buffer(0.5))
     params = LayoutParams(
-        sizes=(30.0, 12.0), max_overlap=2.0, min_contact=6.0, rotations=4, candidates=2, min_neck=3.8, min_extent=7.8, seed=1
+        sizes=(30.0, 12.0), max_overlap=2.0, min_contact=6.0, rotations=4, candidates=2, min_neck=3.8, min_extent=7.8, min_free_radius=0.0, seed=1
     )
     placements = pack(sphere, [ring, dot], params)
     assert [p.char for p in placements][0] == "o"
@@ -126,3 +129,9 @@ def test_置いてある字を残して空きに字を足せる(sphere, fields, 
     for i, a in enumerate(refilled):
         for b in refilled[i + 1 :]:
             assert separation(a, b) >= -PARAMS.max_overlap
+
+
+def test_空きが決めた半径より狭くなったら字を足すのをやめる(sphere, fields):
+    # どんな空きよりも大きい半径を渡すと、最初の1字を置いた所で止まる
+    placements = pack(sphere, fields, dataclasses.replace(PARAMS, min_free_radius=1000.0))
+    assert len(placements) == 1

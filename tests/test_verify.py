@@ -8,11 +8,13 @@ from glyphshell.verify import (
     attracts,
     fit_transforms,
     overlapping_contacts,
-    removal_order,
+    removal_plan,
+    facing_normals,
     false_fits,
     overlap_volume,
     removal_direction,
     removal_blocked_by,
+    wall_normals,
     wall_shortfall,
 )
 
@@ -175,11 +177,61 @@ def test_反発させようのない置き方があれば例外():
 
 
 # test list 4: 決まった順に入れれば、どのピースも外から入れられる
-def test_ふさぐピースを先に抜く順を返す():
-    # 0 は 1 にふさがれ、1 は 2 にふさがれる
-    assert removal_order([[1], [2], []]) == [2, 1, 0]
+def _prism(outline):
+    """xz 平面の輪郭（反時計回り）を、y 方向に 10 mm 押し出した立体。"""
+    section = manifold3d.CrossSection([outline])
+    return manifold3d.Manifold.extrude(section, 10.0).rotate([90.0, 0.0, 0.0])
 
 
-def test_互いにふさぎ合うと例外():
-    with pytest.raises(ValueError):
-        removal_order([[1], [0]])
+def test_くさびに挟まれたピースは隣を抜いた後に斜めへ抜く():
+    # 真ん中は上が狭い台形で、左右の隣が上からかぶさっている。3つとも外向きは +z
+    left = _prism([(-30, 0), (-10, 0), (-5, 10), (-30, 10)])
+    middle = _prism([(-10, 0), (10, 0), (5, 10), (-5, 10)])
+    right = _prism([(10, 0), (30, 0), (30, 10), (5, 10)])
+    slope = np.array([2.0, 0.0, -1.0]) / np.sqrt(5.0)  # 左の隣から真ん中へ向かう、壁の法線
+    mirror = slope * [-1.0, 1.0, 1.0]
+    up = np.array([0.0, 0.0, 1.0])
+    contact_normals = [[(1, slope)], [(0, -slope), (2, -mirror)], [(1, mirror)]]
+    order, directions, stuck = removal_plan(
+        [left, middle, right], [up, up, up], contact_normals, travel=15.0, step=1.0, tolerance=1e-6
+    )
+    assert stuck == []
+    assert order == [0, 1, 2]
+    assert directions[0] == pytest.approx(up)
+    # 真ん中は、残っている右の隣の壁に沿って、左上へ抜く
+    assert directions[1] @ (-mirror) == pytest.approx(0.0, abs=1e-9)
+    assert directions[1][0] < 0 < directions[1][2]
+
+
+def test_面で接している所の法線を返す():
+    normals = facing_normals(cube(10), cube(10, at=(10, 0, 0)), spacing=1.0)
+    assert len(normals) >= 1
+    assert normals == pytest.approx(np.tile([1.0, 0.0, 0.0], (len(normals), 1)), abs=1e-6)
+
+
+def test_離れている立体には接している所がない():
+    assert len(facing_normals(cube(10), cube(10, at=(15, 0, 0)), spacing=1.0)) == 0
+
+
+def test_接触の台が無い隣の壁も避けて抜く():
+    # 真ん中は上が狭い台形。隣との接触（磁石の台）を1つも渡さなくても、壁の向きから抜く向きを決める
+    left = _prism([(-30, 0), (-10, 0), (-5, 10), (-30, 10)])
+    middle = _prism([(-10, 0), (10, 0), (5, 10), (-5, 10)])
+    right = _prism([(10, 0), (30, 0), (30, 10), (5, 10)])
+    solids = [left, middle, right]
+    walls = wall_normals(solids, spacing=1.0)
+    assert [sorted({j for j, _ in wall}) for wall in walls] == [[1], [0, 2], [1]]
+    up = np.array([0.0, 0.0, 1.0])
+    order, directions, stuck = removal_plan(solids, [up, up, up], walls, travel=15.0, step=1.0, tolerance=1e-6)
+    assert stuck == []
+    assert order == [0, 1, 2]
+
+
+def test_互いにふさぎ合うピースは抜けないものとして返す():
+    piece = cube(10)
+    cage = cube(30, at=(-10, -10, -10)) - cube(12, at=(-1, -1, -1))  # まわりを全部囲む
+    up = np.array([0.0, 0.0, 1.0])
+    order, directions, stuck = removal_plan([piece, cage], [up, up], [[], []], travel=8.0, step=1.0, tolerance=1e-6)
+    assert order == []
+    assert stuck == [0, 1]
+    assert directions == [None, None]

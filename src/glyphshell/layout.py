@@ -26,6 +26,7 @@ class LayoutParams:
     candidates: int  # 1か所につき試す字の数。まだ使っていない字から無作為に選ぶ
     min_neck: float  # 字のいちばん細い所に要る幅
     min_extent: float  # 字の外接する箱の短い辺に要る長さ
+    min_free_radius: float  # いちばん広い空きの半径がこれ以下になったら、字を足すのをやめる
     seed: int
 
 
@@ -180,7 +181,7 @@ def pack(
         if placements:
             free = np.where(tried, -np.inf, nearest)
             center = int(free.argmax())
-            if free[center] <= 0:
+            if free[center] <= params.min_free_radius:
                 break
         placement = _best_at(
             surface, center, nearest, owner, contact_vertices, unused, params, rng

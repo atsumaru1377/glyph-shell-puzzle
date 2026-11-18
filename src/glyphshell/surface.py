@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-import manifold3d
 import numpy as np
 import potpourri3d as pp3d
 import trimesh
@@ -31,11 +30,11 @@ def icosphere(radius: float, subdivisions: int) -> Surface:
     )
 
 
-def load_surface(path: Path, height: float, edge_length: float) -> Surface:
-    """メッシュのファイル（STL、OBJ、OFF、PLY など）を読み、字を敷き詰められる曲面にする。
+def load_mesh(path: Path, height: float) -> tuple[np.ndarray, np.ndarray]:
+    """メッシュのファイル（STL、OBJ、OFF、PLY など）を読み、(頂点 [V, 3], 面 [F, 3]) を返す。
 
-    いちばん長い辺が height になるよう拡大縮小し、どの辺も edge_length 以下になるまで
-    三角形を分ける。閉じていないメッシュ、裏返った面のあるメッシュは ValueError にする。
+    いちばん長い辺が height になるよう拡大縮小し、外接する箱の中心を原点に置く。
+    閉じていないメッシュは ValueError にする。
     """
     mesh = trimesh.load_mesh(path, process=True)
     if not isinstance(mesh, trimesh.Trimesh) or not mesh.is_watertight:
@@ -43,22 +42,8 @@ def load_surface(path: Path, height: float, edge_length: float) -> Surface:
     extent = float(mesh.extents.max())
     if extent <= 0:
         raise ValueError(f"大きさが 0 のメッシュ: {path}")
-    vertices = (np.asarray(mesh.vertices) - mesh.bounds.mean(axis=0)) * (height / extent)
-    solid = manifold3d.Manifold(
-        manifold3d.Mesh(
-            vert_properties=np.ascontiguousarray(vertices, dtype=np.float32),
-            tri_verts=np.ascontiguousarray(mesh.faces, dtype=np.uint32),
-        )
-    )
-    if solid.status() != manifold3d.Error.NoError or solid.volume() <= 0:
-        raise ValueError(f"面の向きがそろった閉じた立体ではない: {path}")
-    fine_vertices, fine_faces = trimesh.remesh.subdivide_to_size(vertices, mesh.faces, max_edge=edge_length)
-    refined = trimesh.Trimesh(vertices=fine_vertices, faces=fine_faces, process=True)
-    return Surface(
-        vertices=np.asarray(refined.vertices, dtype=float),
-        faces=np.asarray(refined.faces, dtype=np.int64),
-        normals=np.asarray(refined.vertex_normals, dtype=float),
-    )
+    vertices = (np.asarray(mesh.vertices, dtype=float) - mesh.bounds.mean(axis=0)) * (height / extent)
+    return vertices, np.asarray(mesh.faces, dtype=np.int64)
 
 
 def _disk_around(faces: np.ndarray, center: int, vertex_count: int) -> np.ndarray:

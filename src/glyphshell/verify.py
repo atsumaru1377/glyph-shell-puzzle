@@ -5,6 +5,9 @@ from itertools import combinations, permutations
 
 import manifold3d
 import numpy as np
+import trimesh
+from scipy.optimize import nnls
+from scipy.spatial import cKDTree
 
 
 @dataclass(frozen=True)
@@ -30,22 +33,14 @@ def removal_direction(outward: np.ndarray, contact_outwards: list[np.ndarray]) -
     満たす向きが無ければ ValueError。
     """
     direction = outward / np.linalg.norm(outward)
-    normals = [n / np.linalg.norm(n) for n in contact_outwards]
-    # 食い込む成分を順に取り除く。ダイクストラの交互射影で、条件を満たす向きのうち
-    # outward にいちばん近いものへ収束する
-    corrections = [np.zeros(3) for _ in normals]
-    for _ in range(200):
-        moved = 0.0
-        for k, normal in enumerate(normals):
-            candidate = direction + corrections[k]
-            projected = candidate - max(candidate @ normal, 0.0) * normal
-            corrections[k] = candidate - projected
-            moved = max(moved, float(np.linalg.norm(projected - direction)))
-            direction = projected
-        if moved < 1e-12:
-            break
+    if contact_outwards:
+        normals = np.array([n / np.linalg.norm(n) for n in contact_outwards])
+        # 条件を満たす向きの集まり（錐）への射影。outward から、法線の非負の重みつきの和で表せる
+        # 成分のうち outward にいちばん近いものを引くと、錐の中で outward にいちばん近い向きになる
+        weights, _ = nnls(normals.T, direction)
+        direction = direction - normals.T @ weights
     length = np.linalg.norm(direction)
-    if length < 1e-6 or any(direction @ normal > 1e-6 for normal in normals):
+    if length < 1e-6 or any(direction @ n > 1e-6 * np.linalg.norm(n) for n in contact_outwards):
         raise ValueError("どの接触面にも食い込まずに抜ける向きがない")
     return direction / length
 
@@ -238,18 +233,93 @@ def assign_polarity(
     raise ValueError("間違った置き方をすべて反発させる磁石の向きが見つからない")
 
 
-def removal_order(blocked_by: list[list[int]]) -> list[int]:
-    """全ピースを1つずつ外へ抜いていける順を返す。組み立ては、この逆の順に入れる。
+def _surface_samples(solid: manifold3d.Manifold, spacing: float) -> tuple[np.ndarray, np.ndarray]:
+    """立体の表面に spacing 以下の間隔で取った点と、その点での外向きの法線。"""
+    mesh = solid.to_mesh()
+    vertices, faces = trimesh.remesh.subdivide_to_size(
+        np.asarray(mesh.vert_properties[:, :3], dtype=float), np.asarray(mesh.tri_verts, dtype=np.int64), spacing
+    )
+    tri = vertices[faces]
+    normals = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    length = np.linalg.norm(normals, axis=1)
+    return tri.mean(axis=1)[length > 0], normals[length > 0] / length[length > 0, None]
 
-    blocked_by[i] は、ピース i を抜くときにぶつかるピースの番号。それらを先に抜いてから i を抜く。
-    互いにふさぎ合っていて順が決まらなければ ValueError。
+
+def _facing(samples_a, samples_b, spacing: float) -> np.ndarray:
+    (points_a, normals_a), (points_b, normals_b) = samples_a, samples_b
+    if (points_a.min(axis=0) > points_b.max(axis=0) + spacing).any() or (
+        points_b.min(axis=0) > points_a.max(axis=0) + spacing
+    ).any():
+        return np.zeros((0, 3))
+    distance, nearest = cKDTree(points_b).query(points_a, distance_upper_bound=spacing)
+    close = np.isfinite(distance)
+    # 逆向きとみなす角度は 30 度まで（cos 150° = −0.87）。接している壁どうしは、点の位置がずれても
+    # 法線の向きはほぼ正反対になる
+    facing = np.zeros(len(points_a), dtype=bool)
+    facing[close] = (normals_a[close] * normals_b[nearest[close]]).sum(axis=1) < -np.cos(np.radians(30.0))
+    found = normals_a[facing]
+    # 成分を 0.01 刻み（約 0.6 度）に丸めて同じになる法線は、最初の1つだけ残す
+    _, first = np.unique(np.round(found, 2), axis=0, return_index=True)
+    return found[np.sort(first)]
+
+
+def facing_normals(a: manifold3d.Manifold, b: manifold3d.Manifold, spacing: float) -> np.ndarray:
+    """a の表面のうち、b の表面と向かい合って接している所の法線（a の外向き）を返す。[k, 3]
+
+    両方の表面に spacing 以下の間隔で点を取り、spacing より近くに、ほぼ逆向きの法線を持つ b の点が
+    ある a の点を「接している」とみなす。ほぼ同じ向きの法線は1つにまとめる。
     """
-    remaining = set(range(len(blocked_by)))
-    order = []
-    while remaining:
-        free = sorted(i for i in remaining if not remaining.intersection(blocked_by[i]))
-        if not free:
-            raise ValueError(f"互いにふさぎ合って抜けないピースがある: {sorted(remaining)}")
-        order.extend(free)
-        remaining.difference_update(free)
-    return order
+    return _facing(_surface_samples(a, spacing), _surface_samples(b, spacing), spacing)
+
+
+def wall_normals(solids: list[manifold3d.Manifold], spacing: float) -> list[list[tuple[int, np.ndarray]]]:
+    """立体ごとに、ほかの立体と接している壁の (相手の番号, 法線（自分の外向き）) を返す。"""
+    samples = [_surface_samples(solid, spacing) for solid in solids]
+    return [
+        [(j, normal) for j in range(len(solids)) if j != i for normal in _facing(samples[i], samples[j], spacing)]
+        for i in range(len(solids))
+    ]
+
+
+def removal_plan(
+    solids: list[manifold3d.Manifold],
+    outwards: list[np.ndarray],
+    contact_normals: list[list[tuple[int, np.ndarray]]],
+    travel: float,
+    step: float,
+    tolerance: float,
+) -> tuple[list[int], list[np.ndarray | None], list[int]]:
+    """全ピースを1つずつ外へ抜いていく順と向きを求める。組み立ては、この逆の順に入れる。
+
+    contact_normals[i] は、ピース i の接触ごとの (相手の番号, 接触面の法線（i の外向き）)。
+    抜く向きは、その時点で残っている相手の接触面にだけ食い込まない向きにする。くぼんだ所の
+    ピースは、まわりが全部あると抜ける向きがないが、隣が抜けた後なら斜めに抜ける。
+    戻り値は (抜く順, ピースごとの抜く向き, 抜けずに残ったピース)。残ったピースの向きは None。
+    """
+    remaining = set(range(len(solids)))
+    order: list[int] = []
+    directions: list[np.ndarray | None] = [None] * len(solids)
+    # 前に試して抜けなかったピースは、そのとき邪魔だった相手のどれかが抜けるまで試し直さない
+    waiting: dict[int, set[int]] = {}
+    progress = True
+    while remaining and progress:
+        progress = False
+        for i in sorted(remaining):
+            if i in waiting and waiting[i] <= remaining:
+                continue
+            neighbours = {j for j, _ in contact_normals[i] if j in remaining}
+            try:
+                direction = removal_direction(outwards[i], [n for j, n in contact_normals[i] if j in remaining])
+            except ValueError:
+                waiting[i] = neighbours
+                continue
+            others = sorted(remaining - {i})
+            blocked = removal_blocked_by(solids[i], [solids[j] for j in others], direction, travel, step, tolerance)
+            if blocked:
+                waiting[i] = neighbours | {others[k] for k in blocked}
+                continue
+            remaining.remove(i)
+            order.append(i)
+            directions[i] = direction
+            progress = True
+    return order, directions, sorted(remaining)
