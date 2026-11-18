@@ -4,7 +4,7 @@ import pytest
 import trimesh
 from scipy.spatial import cKDTree
 
-from glyphshell.skin import extra_parts, inner_skin
+from glyphshell.skin import inner_skin, unreached_volume
 from glyphshell.solids import clip_region, thicken
 from glyphshell.surface import local_map
 
@@ -118,9 +118,7 @@ def test_とがった縁の角まで柱が届く():
     # 立方体の角は、内側の面から斜めに遠い。そこまで押し出さないと角が欠ける
     box = manifold3d.Manifold.cube([70.0, 70.0, 70.0], center=True)
     skin = inner_skin(*_arrays(box), THICKNESS, EDGE)
-    parts, lost = extra_parts(skin, min_volume=180.0)
-    assert parts == []
-    assert 0 <= lost < 0.001 * box.volume()
+    assert 0 <= unreached_volume(skin) < 0.001 * box.volume()
 
 
 def test_ピースの内側は内側の面で外側は元の形の表面になる(eared):
@@ -153,18 +151,21 @@ def test_細い板は切り離されて追加のパーツになる(eared):
     assert np.array(eared.outer.bounding_box()).reshape(2, 3)[1, 2] < RADIUS + THICKNESS
 
 
-def test_追加のパーツは切り離した部分で柱が届かない所は残らない(eared):
-    parts, lost = extra_parts(eared, min_volume=180.0)
-    assert len(parts) == 1
-    assert 0 <= lost < 180.0
+def test_切り離した残りの形には柱が届かない所がほとんど残らない(eared):
+    assert 0 <= unreached_volume(eared) < 0.001 * eared.outer.volume()
+
+
+def test_小さなとげは細い部分にしない():
+    # 高さ 6 mm のとげは細長いが、内側の面が入れない太さ（半径 約 15 mm）に比べて短い
+    ball = manifold3d.Manifold.sphere(RADIUS, 96)
+    spike = manifold3d.Manifold.cylinder(6.5, 2.0, 0.2, circular_segments=24).translate([0.0, 0.0, RADIUS - 0.5])
+    assert inner_skin(*_arrays(ball + spike), THICKNESS, EDGE).parts == []
 
 
 def test_とがった縁のある形から細い部分は出ない():
     box = manifold3d.Manifold.cube([70.0, 70.0, 70.0], center=True)
     skin = inner_skin(*_arrays(box), THICKNESS, EDGE)
     assert skin.parts == []
-    parts, lost = extra_parts(skin, min_volume=180.0)
-    assert parts == []
 
 
 def test_殻の厚さより細い形は例外():
@@ -187,6 +188,4 @@ def test_内側の面が入れない太さの細長い板も切り離す():
 
 def test_太くて短い出っ張りは切り離さず柱が先まで届く(stubbed):
     assert stubbed.parts == []
-    parts, lost = extra_parts(stubbed, min_volume=180.0)
-    assert parts == []
-    assert 0 <= lost < 0.001 * stubbed.outer.volume()
+    assert 0 <= unreached_volume(stubbed) < 0.001 * stubbed.outer.volume()

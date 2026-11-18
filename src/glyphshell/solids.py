@@ -7,6 +7,7 @@ import numpy as np
 import trimesh
 
 from glyphshell.surface import Surface
+from glyphshell.verify import wall_shortfall
 
 # 値が 0 になる点を辺の上に置くとき、辺の端からこの割合より近くには置かない。
 # 端に重なると面積 0 の三角形ができ、立体の演算が不安定になる。
@@ -15,6 +16,9 @@ EDGE_GUARD = 0.02
 # 穴の円柱を、接触面から外へはみ出させる長さ。面とちょうど重なる底を作らないため。
 POCKET_OVERSHOOT = 0.5
 POCKET_SEGMENTS = 48
+# 追加のパーツをつなぐ穴で、口から この深さまでは、まわりの肉を確かめない。切り口は丸く
+# 盛り上がっていて（半径は 約 20 mm 以上）、平らな口のふちが面から最大 0.4 mm 浮くため
+JOINT_RIM = 0.5
 # N 極を外へ向ける穴の印。殻の内側の面に付ける丸い突起で、組むと見えなくなる。
 # 高さは最小の肉厚と同じ 0.8 mm（2層ぶん以上で、指で触って分かる）、直径はその3倍
 MARK_HEIGHT = 0.8
@@ -165,11 +169,52 @@ def piece_solid(
                 MARK_HEIGHT + MARK_ROOT, MARK_DIAMETER / 2, circular_segments=POCKET_SEGMENTS
             ).transform(np.column_stack([axis, side, -pocket.normal, root]))
             solid = solid + mark
-        start = pocket.point - pocket.normal * thickness / 2 - axis * POCKET_OVERSHOOT
-        # 円柱は z 軸に沿って作られるので、z 軸を掘る向きに合わせる
-        transform = np.column_stack([side, up, axis, start])
-        cylinder = manifold3d.Manifold.cylinder(
-            hole_depth + POCKET_OVERSHOOT, hole_diameter / 2, circular_segments=POCKET_SEGMENTS
-        ).transform(transform)
-        solid = solid - cylinder
+        solid = drill(solid, pocket.point - pocket.normal * thickness / 2, axis, hole_diameter, hole_depth)
     return solid
+
+
+def drill(
+    solid: manifold3d.Manifold, mouth: np.ndarray, into: np.ndarray, hole_diameter: float, hole_depth: float
+) -> manifold3d.Manifold:
+    """磁石の穴を開ける。mouth は穴の口の中心、into は掘る向き。"""
+    axis = into / np.linalg.norm(into)
+    helper = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    side = np.cross(helper, axis)
+    side /= np.linalg.norm(side)
+    # 円柱は z 軸に沿って作られるので、z 軸を掘る向きに合わせる。口の面とちょうど重なる底を
+    # 作らないよう、口から外へ少しはみ出させる
+    transform = np.column_stack([side, np.cross(axis, side), axis, mouth - axis * POCKET_OVERSHOOT])
+    cylinder = manifold3d.Manifold.cylinder(
+        hole_depth + POCKET_OVERSHOOT, hole_diameter / 2, circular_segments=POCKET_SEGMENTS
+    ).transform(transform)
+    return solid - cylinder
+
+
+def joint_site(
+    extra: manifold3d.Manifold,
+    pieces: list[manifold3d.Manifold],
+    points: np.ndarray,
+    normals: np.ndarray,
+    hole_diameter: float,
+    hole_depth: float,
+    wall: float,
+    tolerance: float,
+) -> tuple[int, np.ndarray, np.ndarray] | None:
+    """追加のパーツ extra を、磁石1個で pieces のどれかにつなぐ場所を探す。
+
+    points と normals は、extra の表面のうち相手と接している所の点と法線（extra の外向き）。
+    接している所の真ん中に近い点から順に、その点から両側へ掘った穴のまわりに wall の肉が残る
+    場所を探す（不足の体積が tolerance 以下）。戻り値は (つなぐピースの番号, 穴の口の中心,
+    extra からピースへ向かう向き)。見つからなければ None。
+    """
+    if len(points) == 0:
+        return None
+    for k in np.argsort(np.linalg.norm(points - points.mean(axis=0), axis=1)):
+        mouth, into = points[k], normals[k]
+        depth = hole_depth - JOINT_RIM
+        if wall_shortfall(extra, mouth - into * JOINT_RIM, -into, hole_diameter, depth, wall) > tolerance:
+            continue
+        for piece, solid in enumerate(pieces):
+            if wall_shortfall(solid, mouth + into * JOINT_RIM, into, hole_diameter, depth, wall) <= tolerance:
+                return piece, mouth, into
+    return None

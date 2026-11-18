@@ -1,8 +1,10 @@
+import manifold3d
 import numpy as np
 import pytest
 
-from glyphshell.solids import Pocket, clip_region, piece_solid, thicken
+from glyphshell.solids import Pocket, clip_region, drill, joint_site, piece_solid, thicken
 from glyphshell.surface import icosphere
+from glyphshell.verify import facing_points
 
 RADIUS = 40.0
 THICKNESS = 8.0
@@ -108,3 +110,42 @@ def test_隣り合う領域を押し出した立体は壁がぴったり合う(s
     both = thicken(clip_region(sphere, _cap_field(sphere, (0, 0, 1), 30.0), reach), THICKNESS)
     # 境で切らずに作った立体と体積が合う（境の上の頂点は外側の面がわずかに折れるので、0.1% まで許す）
     assert disc.volume() + ring.volume() == pytest.approx(both.volume(), rel=1e-3)
+
+
+# test list 19: 追加のパーツは、磁石1個で字のピースにつながる
+def _box(size, low):
+    return manifold3d.Manifold.cube(list(size)).translate(list(low))
+
+
+def test_追加のパーツをつなぐ場所は接する面の真ん中あたりに見つかる():
+    plate = _box((40, 40, 10), (0, 0, 0))
+    far = _box((40, 40, 10), (100, 0, 0))  # 離れたピースは選ばれない
+    post = _box((12, 12, 30), (14, 14, 10))  # 板の真ん中に立つ棒
+    points, normals = facing_points(post, plate, spacing=1.0)
+    site = joint_site(post, [far, plate], points, normals, hole_diameter=6.2, hole_depth=3.0, wall=0.8, tolerance=0.01)
+    assert site is not None
+    piece, mouth, into = site
+    assert piece == 1
+    assert mouth == pytest.approx([20.0, 20.0, 10.0], abs=1.0)
+    assert into == pytest.approx([0.0, 0.0, -1.0], abs=1e-6)
+    # 両側に穴を開けると、円柱ぶんの体積が減る
+    for solid, direction in ((plate, into), (post, -into)):
+        removed = solid.volume() - drill(solid, mouth, direction, 6.2, 3.0).volume()
+        assert removed == pytest.approx(np.pi * 3.1**2 * 3.0, rel=0.02)
+
+
+def test_下のピースが薄すぎるとつなぐ場所は見つからない():
+    plate = _box((40, 40, 3), (0, 0, 7))  # 厚さ 3 mm。穴 3 mm と奥の壁 0.8 mm が入らない
+    post = _box((12, 12, 30), (14, 14, 10))
+    points, normals = facing_points(post, plate, spacing=1.0)
+    assert joint_site(post, [plate], points, normals, hole_diameter=6.2, hole_depth=3.0, wall=0.8, tolerance=0.01) is None
+
+
+def test_丸い面で接していてもつなぐ場所が見つかる():
+    # 耳の切り口は丸く盛り上がる。穴の口のふちが面からわずかに浮くぶんは、肉の不足に数えない
+    dome = manifold3d.Manifold.sphere(20.0, 96)
+    post = _box((16, 16, 30), (-8, -8, 10)) - dome
+    points, normals = facing_points(post, dome, spacing=1.0)
+    site = joint_site(post, [dome], points, normals, hole_diameter=6.2, hole_depth=3.0, wall=0.8, tolerance=0.01)
+    assert site is not None
+    assert np.linalg.norm(site[1]) == pytest.approx(20.0, abs=0.1)

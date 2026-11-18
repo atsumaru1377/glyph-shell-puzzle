@@ -11,7 +11,7 @@ from glyphshell.contacts import (
     piece_fields,
     stable_pieces,
 )
-from glyphshell.layout import LayoutParams, pack
+from glyphshell.layout import LayoutParams, Placement, pack
 from glyphshell.sdf import glyph_field
 from glyphshell.surface import icosphere
 
@@ -182,3 +182,24 @@ def test_入れ直しの足場には接触が足りている字を連鎖させ�
     chain = [contact(0, 1), contact(0, 2), contact(0, 3), contact(1, 2)]
     assert stable_pieces(4, chain, minimum=3) == []
     assert connected_pieces(4, chain, minimum=3) == [0]
+
+
+def test_台の大きさは磁石の穴の高さで測る(sphere):
+    RADIUS = 40.0
+    # 球の外へ 10 mm 上がった所では、面の上の長さが (40 + 10) / 40 = 1.25 倍に広がる。
+    # その高さで台の幅になるよう、面の上の台は 1.25 分の 1 に狭くなる
+    count = len(sphere.vertices)
+    everywhere = np.arange(count)
+    blank = [Placement("x", 0, (0.0, 0.0), 0.0, 1.0, everywhere, np.full(count, 5.0), np.full(count, 5.0))] * 2
+    top = np.array([0.0, 0.0, 1.0])
+    contact = Contact(0, 1, top * RADIUS, top, np.array([1.0, 0.0, 0.0]), 10.0)
+
+    def width_on_surface(pad):
+        inside = piece_fields(sphere, blank, [contact], pad)[0] < 0
+        return np.ptp(sphere.vertices[inside, 1])
+
+    flat = width_on_surface(PadSize(length=8.0, width=16.0))
+    lifted = width_on_surface(PadSize(length=8.0, width=16.0, lift=10.0))
+    assert flat == pytest.approx(16.0, abs=1.5)  # メッシュの辺の長さ（約 1.3 mm）ぶんの粗さ
+    assert lifted == pytest.approx(16.0 / 1.25, abs=1.5)
+    assert lifted < flat - 1.5

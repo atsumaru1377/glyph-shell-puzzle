@@ -211,7 +211,8 @@ def _split_slender_parts(
             continue
         points = _arrays(part)[0]
         length = float(ndimage.map_coordinates(away, ((points - raw.low) / raw.cell).T, order=1).max()) - radius
-        if length > 0 and length**3 > SLENDER_RATIO**2 * part.volume():
+        # 突き出しが radius より短い塊は、細長くても切り離さない（とがった縁のかけらや小さなとげ）
+        if length > radius and length**3 > SLENDER_RATIO**2 * part.volume():
             parts.append(part)
     parts.sort(key=lambda part: -part.volume())
     body = outer
@@ -256,16 +257,10 @@ def inner_skin(vertices: np.ndarray, faces: np.ndarray, thickness: float, edge_l
     return Skin(surface, outer, parts, _reach(surface, raw), inset)
 
 
-def extra_parts(skin: Skin, min_volume: float) -> tuple[list[manifold3d.Manifold], float]:
-    """字のピースにならない追加のパーツを返す。切り離した細い部分と、内側の面から押し出した柱が
-    届かない部分。
-
-    柱が届かない部分のうち min_volume より小さいかけらは捨てる。戻り値の2つ目は、捨てた体積の合計。
-    """
+def unreached_volume(skin: Skin) -> float:
+    """skin.outer のうち、内側の面から押し出した柱が届かない所の体積。どのピースにも入らない。"""
     top = skin.surface.vertices + skin.reach[:, None] * skin.surface.normals
     filled = _manifold(top, skin.surface.faces)
     if filled.status() != manifold3d.Error.NoError or filled.volume() <= 0:
         raise ValueError("押し出した面が閉じた立体にならない")
-    rest = sorted((skin.outer - filled).decompose(), key=lambda part: -part.volume())
-    unreached = [part for part in rest if part.volume() >= min_volume]
-    return [*skin.parts, *unreached], float(sum(part.volume() for part in rest[len(unreached) :]))
+    return float((skin.outer - filled).volume())

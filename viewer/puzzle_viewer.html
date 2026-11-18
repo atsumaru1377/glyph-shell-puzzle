@@ -208,6 +208,9 @@
       [report.test6_thin_walls.length === 0, "磁石の穴のまわりの肉厚 0.8 mm 以上"],
       [report.test9_same_poles.length === 0, "どの接触も、両側の磁石の極が逆を向く"],
       [report.test5_wrong_fits_attracting === 0, "別の場所に付く置き方 " + report.test5_wrong_fits_checked + " 通りは、どれも磁石が反発する"],
+      [report.test19_unjoined_extras === 0, report.extra_parts_joined_to.length === 0
+        ? "字のピースにならない追加のパーツはない"
+        : "追加のパーツ " + report.extra_parts_joined_to.length + " 個は、磁石1個で字のピースにつながる（つなぐ所が無いもの " + report.test19_unjoined_extras + " 個）"],
       [report.test4_stuck.length === 0, report.test4_stuck.length === 0
         ? "下の順に入れれば、どのピースも外から入る"
         : "外から入れられないピース " + report.test4_stuck.length + " 個（" + report.test4_stuck.join(" ") + "）"]

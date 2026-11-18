@@ -89,6 +89,7 @@ class Job:
 
     surface: Surface  # 字を敷き詰める面
     skin: Skin | None  # メッシュを渡したときの、内側の面と元の形。球のときは None
+    pad: PadSize  # 接触の台。メッシュを渡したときは、磁石の穴の高さで大きさを測る
     shape: str  # 外形の呼び名（「球」か、メッシュのファイル名）
     out: Path
     layout: Path  # 配置を保存するファイル
@@ -109,12 +110,14 @@ def parse_job(description: str) -> Job:
     if args.height <= 0 or args.rounds < 1:
         parser.error("--height は正の数、--rounds は 1 以上にする")
     if args.mesh is None:
-        surface, skin, shape = icosphere(RADIUS, SUBDIVISIONS), None, "球"
+        # 球は曲がりがゆるく、穴の高さで測っても台の幅は片側 0.25 mm しか変わらないので、面の上で測る
+        surface, skin, pad, shape = icosphere(RADIUS, SUBDIVISIONS), None, PAD, "球"
     else:
         skin = inner_skin(*load_mesh(args.mesh, args.height), THICKNESS, EDGE_LENGTH)
-        surface, shape = skin.surface, args.mesh.name
+        # 磁石の穴の中心は、内側の面から殻の厚さの半分だけ外にある
+        surface, pad, shape = skin.surface, dataclasses.replace(PAD, lift=THICKNESS / 2), args.mesh.name
     args.out.mkdir(parents=True, exist_ok=True)
-    return Job(surface, skin, shape, args.out, args.layout or args.out / "layout.npz", args.reuse, args.rounds)
+    return Job(surface, skin, pad, shape, args.out, args.layout or args.out / "layout.npz", args.reuse, args.rounds)
 
 
 def _layout(job: Job) -> list:
@@ -137,7 +140,7 @@ def _layout(job: Job) -> list:
     placements = pack(surface, fields, PARAMS)
     best = []
     for round_ in range(1, job.rounds + 1):
-        contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
+        contacts = find_contacts(surface, placements, MIN_CONTACT, job.pad)
         kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
         scaffold = connected_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
         print(
@@ -160,7 +163,7 @@ def main() -> None:
     job = parse_job("曲面に字を敷き詰める")
     surface = job.surface
     placements = _layout(job)
-    contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
+    contacts = find_contacts(surface, placements, MIN_CONTACT, job.pad)
     kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
     dropped = [p.char for i, p in enumerate(placements) if i not in kept]
     placements = [placements[i] for i in kept]
@@ -169,8 +172,8 @@ def main() -> None:
             f"接触が {MIN_CONTACTS_PER_PIECE} か所に届く字が1つも残らなかった（{job.shape}）。"
             "字の大きさに比べて形が細かいと、字がまばらにしか置けない"
         )
-    contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
-    pieces = piece_fields(surface, placements, contacts, PAD)
+    contacts = find_contacts(surface, placements, MIN_CONTACT, job.pad)
+    pieces = piece_fields(surface, placements, contacts, job.pad)
 
     mark = np.full(len(surface.vertices), np.inf)
     for contact in contacts:

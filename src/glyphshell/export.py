@@ -27,19 +27,19 @@ from glyphshell.build import (
     MIN_CONTACT,
     MIN_CONTACTS_PER_PIECE,
     MIN_WALL,
-    PAD,
     THICKNESS,
     parse_job,
 )
 from glyphshell.contacts import find_contacts, piece_fields, stable_pieces
 from glyphshell.layout import load_layout
 from glyphshell.preview import render_solids, write_png
-from glyphshell.skin import extra_parts
-from glyphshell.solids import Pocket, clip_region, piece_solid, thicken
+from glyphshell.skin import unreached_volume
+from glyphshell.solids import Pocket, clip_region, drill, joint_site, piece_solid, thicken
 from glyphshell.verify import (
     ContactFrame,
     assign_polarity,
     attracts,
+    facing_points,
     fit_transforms,
     overlap_volume,
     overlapping_contacts,
@@ -61,9 +61,6 @@ REMOVAL_TRAVEL_RATIO = 1.5
 REMOVAL_STEP = 1.0
 # 隣のピースと接している壁を探すときの、表面に取る点の間隔。メッシュの辺の長さ（1.4 mm）より細かくする
 WALL_SPACING = 1.0
-# 追加のパーツとして残す体積の下限。磁石の穴とまわりの壁が入る円柱の体積。
-# これより小さいかけらは、磁石を埋められないので付けようがない
-EXTRA_MIN_VOLUME = np.pi * (HOLE_DIAMETER / 2 + MIN_WALL) ** 2 * (MAGNET_THICKNESS + MIN_WALL)
 # 別の場所にはまるかを調べるときの許容差。磁石どうしが半径（3 mm）より大きくずれると、
 # 面どうしが重ならず吸着しない。向きは 20 度より大きくずれると、台の端で 2.7 mm の隙間になる
 FIT_POSITION_TOLERANCE = MAGNET_DIAMETER / 2
@@ -96,15 +93,15 @@ def main() -> None:
     started = time.time()
     surface, skin = job.surface, job.skin
     placements = load_layout(job.layout)
-    contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
+    contacts = find_contacts(surface, placements, MIN_CONTACT, job.pad)
     kept = stable_pieces(len(placements), contacts, MIN_CONTACTS_PER_PIECE)
     dropped = [p.char for i, p in enumerate(placements) if i not in kept]
     if dropped:
         placements = [placements[i] for i in kept]
-        contacts = find_contacts(surface, placements, MIN_CONTACT, PAD)
+        contacts = find_contacts(surface, placements, MIN_CONTACT, job.pad)
     if not placements:
         raise SystemExit(f"接触が {MIN_CONTACTS_PER_PIECE} か所に届く字が1つも残らなかった（{job.layout}）")
-    fields = piece_fields(surface, placements, contacts, PAD)
+    fields = piece_fields(surface, placements, contacts, job.pad)
     count = len(placements)
     chars = [p.char for p in placements]
 
@@ -154,21 +151,35 @@ def main() -> None:
             plain.append(parts[0])
             if len(parts) > 1:
                 dropped_volume[chars[i]] = round(sum(part.volume() for part in parts[1:]), 1)
-        extras, lost_volume = extra_parts(skin, EXTRA_MIN_VOLUME)
+        extras, lost_volume = list(skin.parts), unreached_volume(skin)
     solids = [piece_solid(plain[i], THICKNESS, pockets[i], HOLE_DIAMETER, MAGNET_THICKNESS) for i in range(count)]
+    # 19番: 追加のパーツ（耳など）は、磁石1個で字のピースにつなぐ。穴は、接している面の両側に開ける
+    joined_to: list[str | None] = []
+    for k, extra in enumerate(extras):
+        points, normals = facing_points(extra, skin.outer, WALL_SPACING)
+        site = joint_site(extra, solids, points, normals, HOLE_DIAMETER, MAGNET_THICKNESS, MIN_WALL, WALL_TOLERANCE)
+        if site is None:
+            joined_to.append(None)
+            continue
+        piece, mouth, into = site
+        solids[piece] = drill(solids[piece], mouth, into, HOLE_DIAMETER, MAGNET_THICKNESS)
+        extras[k] = drill(extra, mouth, -into, HOLE_DIAMETER, MAGNET_THICKNESS)
+        joined_to.append(chars[piece])
     print(f"{count} ピースの立体を作った（{time.time() - started:.0f} 秒）")
 
     report: dict = {
         "pieces": count,
         "contacts": len(contacts),
-        "magnets": 2 * len(contacts),
+        "magnets": 2 * len(contacts) + 2 * sum(piece is not None for piece in joined_to),
         "dropped_for_contacts": dropped,
         "dropped_islands": {
             chars[i]: round(regions[i].dropped_area, 1) for i in range(count) if regions[i].dropped_area > 0
         },
         "dropped_fragments_volume": dropped_volume,
         "extra_parts_volume": [round(extra.volume()) for extra in extras],
-        "discarded_crumbs_volume": round(lost_volume, 1),
+        "extra_parts_joined_to": joined_to,
+        "test19_unjoined_extras": sum(piece is None for piece in joined_to),
+        "unreached_volume": round(lost_volume, 1),
     }
 
     # 2番: ピースどうしが重ならない
@@ -240,7 +251,7 @@ def main() -> None:
 
     viewer = {
         "shape": job.shape,
-        "extent": round(float((surface.vertices.max(axis=0) - surface.vertices.min(axis=0)).max()), 1),
+        "extent": round(float(np.ptp(np.vstack([mesh.bounds for mesh in meshes + extra_meshes]), axis=0).max()), 1),
         "thickness": THICKNESS,
         "magnet": {"diameter": MAGNET_DIAMETER, "thickness": MAGNET_THICKNESS},
         "report": report,

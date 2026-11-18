@@ -246,37 +246,55 @@ def _surface_samples(solid: manifold3d.Manifold, spacing: float) -> tuple[np.nda
 
 
 def _facing(samples_a, samples_b, spacing: float) -> np.ndarray:
+    """samples_a のうち、samples_b と向かい合って接している点の番号を返す。"""
     (points_a, normals_a), (points_b, normals_b) = samples_a, samples_b
     if (points_a.min(axis=0) > points_b.max(axis=0) + spacing).any() or (
         points_b.min(axis=0) > points_a.max(axis=0) + spacing
     ).any():
-        return np.zeros((0, 3))
+        return np.zeros(0, dtype=np.int64)
     distance, nearest = cKDTree(points_b).query(points_a, distance_upper_bound=spacing)
-    close = np.isfinite(distance)
+    close = np.flatnonzero(np.isfinite(distance))
     # 逆向きとみなす角度は 30 度まで（cos 150° = −0.87）。接している壁どうしは、点の位置がずれても
     # 法線の向きはほぼ正反対になる
-    facing = np.zeros(len(points_a), dtype=bool)
-    facing[close] = (normals_a[close] * normals_b[nearest[close]]).sum(axis=1) < -np.cos(np.radians(30.0))
-    found = normals_a[facing]
-    # 成分を 0.01 刻み（約 0.6 度）に丸めて同じになる法線は、最初の1つだけ残す
-    _, first = np.unique(np.round(found, 2), axis=0, return_index=True)
-    return found[np.sort(first)]
+    opposite = (normals_a[close] * normals_b[nearest[close]]).sum(axis=1) < -np.cos(np.radians(30.0))
+    return close[opposite]
+
+
+def _distinct(normals: np.ndarray) -> np.ndarray:
+    """成分を 0.01 刻み（約 0.6 度）に丸めて同じになる法線は、最初の1つだけ残す。"""
+    _, first = np.unique(np.round(normals, 2), axis=0, return_index=True)
+    return normals[np.sort(first)]
+
+
+def facing_points(a: manifold3d.Manifold, b: manifold3d.Manifold, spacing: float) -> tuple[np.ndarray, np.ndarray]:
+    """a の表面のうち、b の表面と向かい合って接している所の (点 [k, 3], 法線（a の外向き） [k, 3]) を返す。
+
+    両方の表面に spacing 以下の間隔で点を取り、spacing より近くに、ほぼ逆向きの法線を持つ b の点が
+    ある a の点を「接している」とみなす。
+    """
+    points, normals = _surface_samples(a, spacing)
+    index = _facing((points, normals), _surface_samples(b, spacing), spacing)
+    return points[index], normals[index]
 
 
 def facing_normals(a: manifold3d.Manifold, b: manifold3d.Manifold, spacing: float) -> np.ndarray:
     """a の表面のうち、b の表面と向かい合って接している所の法線（a の外向き）を返す。[k, 3]
 
-    両方の表面に spacing 以下の間隔で点を取り、spacing より近くに、ほぼ逆向きの法線を持つ b の点が
-    ある a の点を「接している」とみなす。ほぼ同じ向きの法線は1つにまとめる。
+    ほぼ同じ向きの法線は1つにまとめる。
     """
-    return _facing(_surface_samples(a, spacing), _surface_samples(b, spacing), spacing)
+    return _distinct(facing_points(a, b, spacing)[1])
 
 
 def wall_normals(solids: list[manifold3d.Manifold], spacing: float) -> list[list[tuple[int, np.ndarray]]]:
     """立体ごとに、ほかの立体と接している壁の (相手の番号, 法線（自分の外向き）) を返す。"""
     samples = [_surface_samples(solid, spacing) for solid in solids]
     return [
-        [(j, normal) for j in range(len(solids)) if j != i for normal in _facing(samples[i], samples[j], spacing)]
+        [
+            (j, normal)
+            for j in range(len(solids))
+            if j != i
+            for normal in _distinct(samples[i][1][_facing(samples[i], samples[j], spacing)])
+        ]
         for i in range(len(solids))
     ]
 

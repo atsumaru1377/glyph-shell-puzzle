@@ -26,6 +26,9 @@ WIDTH_RANGE = 20.0
 class PadSize:
     length: float  # 接触面に垂直な向きの長さ（両側の合計）
     width: float  # 接触面に沿った幅
+    # 台の大きさを測る高さ（曲面から法線の外向きに）。磁石の穴は曲面から離れた所に開くので、
+    # 曲面が曲がっていると、曲面の上で測った台とは大きさが変わる。0 なら曲面の上で測る
+    lift: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,7 @@ def _clusters(positions: np.ndarray, link: float) -> list[np.ndarray]:
 
 def _pad_coordinates(surface: Surface, contact: Contact, pad: PadSize):
     """台のまわりの頂点について、(頂点の番号, 接触面からの距離 s, 面に沿った位置 t) を返す。"""
-    offset = surface.vertices - contact.point
+    offset = (surface.vertices + pad.lift * surface.normals) - (contact.point + pad.lift * contact.normal)
     # 同じ側の面だけを対象にする（薄い形の裏側を拾わない）
     near = (np.linalg.norm(offset, axis=1) < np.hypot(pad.length, pad.width)) & (
         surface.normals @ contact.normal > 0.5

@@ -10,6 +10,7 @@ from glyphshell.verify import (
     overlapping_contacts,
     removal_plan,
     facing_normals,
+    facing_points,
     false_fits,
     overlap_volume,
     removal_direction,
@@ -206,6 +207,13 @@ def test_くさびに挟まれたピースは隣を抜いた後に斜めへ抜�
 def test_面で接している所の法線を返す():
     normals = facing_normals(cube(10), cube(10, at=(10, 0, 0)), spacing=1.0)
     assert len(normals) >= 1
+    assert normals == pytest.approx(np.tile([1.0, 0.0, 0.0], (len(normals), 1)), abs=1e-6)
+
+
+def test_面で接している所の点を返す():
+    points, normals = facing_points(cube(10), cube(10, at=(10, 0, 0)), spacing=1.0)
+    assert len(points) > 50
+    assert points[:, 0] == pytest.approx(10.0, abs=1e-6)
     assert normals == pytest.approx(np.tile([1.0, 0.0, 0.0], (len(normals), 1)), abs=1e-6)
 
 
